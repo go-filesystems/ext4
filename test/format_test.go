@@ -34,6 +34,8 @@ func TestFormat_CreatesFile(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("image file not created: %v", err)
 	}
+	// Cross-validate the freshly-formatted image with e2fsck.
+	runE2fsck(t, path)
 }
 
 func TestFormat_FileSizePreserved(t *testing.T) {
@@ -117,19 +119,26 @@ func TestFormat_WriteReadRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Format: %v", err)
 	}
-	defer fs.Close()
 
 	const content = "hello from Format\n"
 	if err := fs.WriteFile("/hello.txt", []byte(content), 0o644); err != nil {
+		fs.Close()
 		t.Fatalf("WriteFile: %v", err)
 	}
 	got, err := fs.ReadFile("/hello.txt")
 	if err != nil {
+		fs.Close()
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if string(got) != content {
 		t.Errorf("ReadFile: got %q, want %q", got, content)
 	}
+	// Cross-validate the on-disk image with upstream e2fsck. Skipped when
+	// e2fsck is not installed.
+	if err := fs.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	runE2fsck(t, path)
 }
 
 func TestFormat_WriteMultipleFiles(t *testing.T) {
@@ -138,7 +147,6 @@ func TestFormat_WriteMultipleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Format: %v", err)
 	}
-	defer fs.Close()
 
 	files := map[string]string{
 		"/a.txt": "content of a",
@@ -147,18 +155,25 @@ func TestFormat_WriteMultipleFiles(t *testing.T) {
 	}
 	for name, data := range files {
 		if err := fs.WriteFile(name, []byte(data), 0o644); err != nil {
+			fs.Close()
 			t.Fatalf("WriteFile %s: %v", name, err)
 		}
 	}
 	for name, want := range files {
 		got, err := fs.ReadFile(name)
 		if err != nil {
+			fs.Close()
 			t.Fatalf("ReadFile %s: %v", name, err)
 		}
 		if string(got) != want {
 			t.Errorf("%s: got %q, want %q", name, got, want)
 		}
 	}
+	// Cross-validate with e2fsck (skipped when binary unavailable).
+	if err := fs.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	runE2fsck(t, path)
 }
 
 func TestFormat_ReadNonExistentFile(t *testing.T) {
@@ -211,14 +226,19 @@ func TestFormat_ReOpenAndWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer fs.Close()
 	got, err := fs.ReadFile("/data.bin")
 	if err != nil {
+		fs.Close()
 		t.Fatalf("ReadFile after re-open: %v", err)
 	}
 	if string(got) != "original" {
 		t.Errorf("got %q, want \"original\"", got)
 	}
+	// Cross-validate the image after Format→close→Open→read→close with e2fsck.
+	if err := fs.Close(); err != nil {
+		t.Fatalf("Close after re-open: %v", err)
+	}
+	runE2fsck(t, path)
 }
 
 func TestFormat_MultiGroup(t *testing.T) {
@@ -229,17 +249,23 @@ func TestFormat_MultiGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Format 256 MiB: %v", err)
 	}
-	defer fs.Close()
 
 	const content = "multi-group test"
 	if err := fs.WriteFile("/multi.txt", []byte(content), 0o644); err != nil {
+		fs.Close()
 		t.Fatalf("WriteFile in multi-group image: %v", err)
 	}
 	got, err := fs.ReadFile("/multi.txt")
 	if err != nil {
+		fs.Close()
 		t.Fatalf("ReadFile in multi-group image: %v", err)
 	}
 	if string(got) != content {
 		t.Errorf("got %q, want %q", got, content)
 	}
+	// Cross-validate with e2fsck — catches BGD/bitmap issues across groups.
+	if err := fs.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	runE2fsck(t, path)
 }
