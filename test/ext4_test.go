@@ -2,7 +2,6 @@ package filesystem_ext4_test
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,25 +175,22 @@ func makeTestImage(t *testing.T, sizeMB int) string {
 // The copy is automatically removed when the test ends.
 func copyImage(t *testing.T, src string) string {
 	t.Helper()
-	sf, err := os.Open(src)
-	if err != nil {
-		t.Fatalf("open source image: %v", err)
-	}
-	defer sf.Close()
 
+	// Allocate a unique destination path without materialising it — cloneFile
+	// (via cp -c on darwin) refuses to overwrite an existing target.
 	df, err := os.CreateTemp("", "ext4-copy-*.img")
 	if err != nil {
 		t.Fatalf("create copy: %v", err)
 	}
 	name := df.Name()
+	df.Close()
+	if err := os.Remove(name); err != nil {
+		t.Fatalf("remove placeholder: %v", err)
+	}
 	t.Cleanup(func() { os.Remove(name) })
 
-	if _, err := io.Copy(df, sf); err != nil {
-		df.Close()
-		t.Fatalf("copy image: %v", err)
-	}
-	if err := df.Close(); err != nil {
-		t.Fatalf("close copy: %v", err)
+	if err := cloneFile(src, name); err != nil {
+		t.Fatalf("clone image: %v", err)
 	}
 	return name
 }
