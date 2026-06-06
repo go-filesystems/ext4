@@ -1,6 +1,3 @@
-//go:build test
-// +build test
-
 package filesystem_ext4_test
 
 import (
