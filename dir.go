@@ -84,7 +84,7 @@ func readDir(f readerWriterAt, fsOffset int64, sb *superblock, dirInode *inode) 
 		return inlineDirEntries(f, fsOffset, sb, dirInode)
 	}
 
-	exts, err := dirInode.extents(f, fsOffset, sb)
+	exts, err := dirInode.readExtents(f, fsOffset, sb)
 	if err != nil {
 		return nil, err
 	}
