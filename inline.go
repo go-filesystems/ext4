@@ -199,25 +199,35 @@ func (in *inode) inlineData(f readerWriterAt, fsOffset int64, sb *superblock) ([
 
 // inlineDirEntries parses the directory entries stored inline in the inode.
 //
-// For inline directories the on-disk layout differs slightly from a normal
-// directory block: the very first 4 bytes of i_block hold the inode number of
-// "." (a fake header), and the regular directory-entry stream — beginning with
-// the ".." entry — starts at offset 4. Any overflow lives in the system.data
-// xattr and is a plain directory-entry stream (no 4-byte prefix).
+// For inline directories the on-disk layout differs from a normal directory
+// block (this matches the Linux kernel's ext4_inline_data layout):
+//
+//   - The first 4 bytes of i_block hold the inode number of the PARENT, i.e.
+//     the ".." entry. Neither "." nor ".." is stored as a real dirent record.
+//   - The named-entry dirent stream (regular ext4_dir_entry_2 records) starts
+//     at offset 4 of i_block.
+//   - The "." entry is the inode's OWN number (in.num) and is never stored on
+//     disk; it is synthesised here.
+//
+// So we synthesise "." (in.num) and ".." (u32 at i_block[0:4]), then parse the
+// named stream from offset 4. Any overflow lives in the system.data xattr and
+// is a plain directory-entry stream of named entries (no 4-byte prefix).
 func inlineDirEntries(f readerWriterAt, fsOffset int64, sb *superblock, in *inode) ([]DirEntry, error) {
 	le := binary.LittleEndian
 	iblock := in.raw[inodeOffBlock : inodeOffBlock+inlineIBlockMax]
 
 	var entries []DirEntry
 
-	// "." entry: its inode number is the inode itself, stored in the first
-	// 4 bytes of i_block. Synthesise the entry directly.
-	dotIno := le.Uint32(iblock[0:])
-	if dotIno != 0 {
-		entries = append(entries, DirEntry{Inode: dotIno, Name: ".", FileType: FtDir})
-	}
+	// "." entry: implicit, its inode number is the inode itself (in.num) and is
+	// not stored on disk. Synthesise it.
+	entries = append(entries, DirEntry{Inode: in.num, Name: ".", FileType: FtDir})
 
-	// The regular entry stream (".." first) begins at offset 4 of i_block.
+	// ".." entry: implicit, its inode number is the parent, stored in the first
+	// 4 bytes of i_block. Synthesise it.
+	parentIno := le.Uint32(iblock[0:])
+	entries = append(entries, DirEntry{Inode: parentIno, Name: "..", FileType: FtDir})
+
+	// The named-entry stream begins at offset 4 of i_block.
 	entries = append(entries, parseDirBlock(iblock[4:])...)
 
 	// Overflow region in system.data, if the directory is larger than 60 bytes.

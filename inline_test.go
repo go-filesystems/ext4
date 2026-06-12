@@ -114,18 +114,21 @@ func TestInlineData_XattrOverflow(t *testing.T) {
 	}
 }
 
-// TestInlineDir_Entries builds an inline directory (i_block-resident) and
-// verifies readDir synthesises "." and parses the "..", "f1", "f2" entries.
+// TestInlineDir_Entries builds an inline directory (i_block-resident) using the
+// REAL kernel inline-directory layout and verifies readDir synthesises "." (the
+// inode's own number) and ".." (the parent at i_block[0:4]) and parses the
+// named "f1", "f2" entries from the stream at offset 4.
 func TestInlineDir_Entries(t *testing.T) {
 	le := binary.LittleEndian
 
-	// Build the inline directory byte stream:
-	//   bytes[0:4]   = inode number of "." (fake header)
-	//   bytes[4:]    = regular dirent stream starting with ".."
+	// Real kernel inline-directory layout:
+	//   bytes[0:4]   = inode number of the PARENT ("..")
+	//   bytes[4:]    = named-entry dirent stream (NO "." or ".." records)
+	// The "." entry is the inode's own number and is never stored.
 	const selfIno = 11
 	const parentIno = 2
 
-	// Assemble the dirent stream that starts at offset 4 of i_block.
+	// Assemble the named-entry dirent stream that starts at offset 4 of i_block.
 	stream := make([]byte, inlineIBlockMax-4)
 	off := 0
 	writeEnt := func(ino uint32, name string, ft uint8, recLen int) {
@@ -136,15 +139,14 @@ func TestInlineDir_Entries(t *testing.T) {
 		copy(stream[off+8:], name)
 		off += recLen
 	}
-	// ".." entry.
-	writeEnt(parentIno, "..", FtDir, minDirentSize(2))
 	// "f1" regular file.
 	writeEnt(101, "f1", FtRegFile, minDirentSize(2))
 	// "f2" regular file consumes the remaining slack so it terminates cleanly.
 	writeEnt(102, "f2", FtRegFile, len(stream)-off)
 
 	data := make([]byte, inlineIBlockMax)
-	le.PutUint32(data[0:], selfIno)
+	// First 4 bytes hold the parent inode number.
+	le.PutUint32(data[0:], parentIno)
 	copy(data[4:], stream)
 
 	raw := make([]byte, 256)
