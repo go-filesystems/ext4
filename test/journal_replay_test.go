@@ -3,11 +3,18 @@ package filesystem_ext4_test
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"testing"
 
 	ext4 "github.com/go-filesystems/ext4"
 )
+
+// journalCastagnoli is the standard CRC-32C table used by the sidecar
+// journal's commit-record integrity check. The journal computes this crc
+// with the canonical convention (crc32.Update(0, ...)), which is distinct
+// from ext4's metadata checksum convention exposed by ext4.CRC32c.
+var journalCastagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 const (
 	journalMagic uint32 = 0x4A424432
@@ -58,7 +65,7 @@ func TestJournalReplay_AppliesCommittedTx(t *testing.T) {
 	if _, err := buf.Write(data); err != nil {
 		t.Fatalf("write data: %v", err)
 	}
-	crc := ext4.CRC32c(0, buf.Bytes())
+	crc := crc32.Update(0, journalCastagnoli, buf.Bytes())
 
 	js, err := os.OpenFile(jsPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {

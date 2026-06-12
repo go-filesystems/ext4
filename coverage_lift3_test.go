@@ -221,10 +221,18 @@ func TestBitmapCsumSeed(t *testing.T) {
 	for i := range sb.raw {
 		sb.raw[i] = byte(i)
 	}
+	// The block/inode bitmap checksum is seeded with the filesystem-wide
+	// checksum seed and does NOT incorporate the block-group number (unlike
+	// the group-descriptor checksum). The seed must therefore be identical
+	// across groups and equal to sb.csumSeed(), matching e2fsprogs and the
+	// kernel (verified against e2fsck on real images).
 	s0 := bitmapCsumSeed(sb, 0)
 	s1 := bitmapCsumSeed(sb, 1)
-	if s0 == s1 {
-		t.Fatalf("seeds for different groups should differ: s0=%d s1=%d", s0, s1)
+	if s0 != s1 {
+		t.Fatalf("bitmap csum seed must not depend on group: s0=%d s1=%d", s0, s1)
+	}
+	if s0 != sb.csumSeed() {
+		t.Fatalf("bitmap csum seed = %d, want csumSeed()=%d", s0, sb.csumSeed())
 	}
 }
 
