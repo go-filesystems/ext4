@@ -846,17 +846,31 @@ func TestInodeExtentsErrors(t *testing.T) {
 	rw := ext4.CloneFSImage(t, fs)
 	sb := ext4.CloneSuperblockFromFS(fs)
 	in := ext4.NewTestInode(5, uint16(sb.InodeSize))
-	// inline data flag -> error
+	ext4.SetMode(in, 0x8000, 1)
 	le := binary.LittleEndian
-	flags := uint32(ext4.InodeFlagInlineData)
-	le.PutUint32(ext4.InodeRaw(in)[ext4.InodeOffFlags:], flags)
-	if _, err := ext4.ReadFileData(rw, 0, sb, in); err == nil {
-		t.Fatalf("expected extents to fail for inline data")
+
+	// Inline data is not supported -> readFileData errors. Persist the inode so
+	// readFileData's on-disk re-read observes the inline flag.
+	le.PutUint32(ext4.InodeRaw(in)[ext4.InodeOffFlags:], uint32(ext4.InodeFlagInlineData))
+	if err := ext4.WriteInode(rw, 0, sb, in); err != nil {
+		t.Fatalf("WriteInode (inline): %v", err)
 	}
-	// old-style block map (clear extents flag)
-	le.PutUint32(ext4.InodeRaw(in)[ext4.InodeOffFlags:], 0)
 	if _, err := ext4.ReadFileData(rw, 0, sb, in); err == nil {
-		t.Fatalf("expected extents to fail for old-style block map")
+		t.Fatalf("expected readFileData to fail for inline data")
+	}
+
+	// Old-style block map (extents flag clear) is now supported on read paths;
+	// an empty (size 0) block-map inode yields empty content, not an error.
+	le.PutUint32(ext4.InodeRaw(in)[ext4.InodeOffFlags:], 0)
+	if err := ext4.WriteInode(rw, 0, sb, in); err != nil {
+		t.Fatalf("WriteInode (block map): %v", err)
+	}
+	data, err := ext4.ReadFileData(rw, 0, sb, in)
+	if err != nil {
+		t.Fatalf("readFileData on block-map inode: %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("expected empty content, got %d bytes", len(data))
 	}
 }
 
