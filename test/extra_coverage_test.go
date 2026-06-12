@@ -849,14 +849,17 @@ func TestInodeExtentsErrors(t *testing.T) {
 	ext4.SetMode(in, 0x8000, 1)
 	le := binary.LittleEndian
 
-	// Inline data is not supported -> readFileData errors. Persist the inode so
-	// readFileData's on-disk re-read observes the inline flag.
+	// Inline data is now supported on read: an empty inline inode reads as
+	// empty content. Persist the inode so readFileData's on-disk re-read
+	// observes the inline flag.
 	le.PutUint32(ext4.InodeRaw(in)[ext4.InodeOffFlags:], uint32(ext4.InodeFlagInlineData))
 	if err := ext4.WriteInode(rw, 0, sb, in); err != nil {
 		t.Fatalf("WriteInode (inline): %v", err)
 	}
-	if _, err := ext4.ReadFileData(rw, 0, sb, in); err == nil {
-		t.Fatalf("expected readFileData to fail for inline data")
+	if d, err := ext4.ReadFileData(rw, 0, sb, in); err != nil {
+		t.Fatalf("readFileData on inline inode: %v", err)
+	} else if len(d) != 0 {
+		t.Fatalf("expected empty inline content, got %d bytes", len(d))
 	}
 
 	// Old-style block map (extents flag clear) is now supported on read paths;
