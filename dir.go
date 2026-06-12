@@ -78,7 +78,7 @@ func parseDirBlock(buf []byte) []DirEntry {
 
 // readDir reads all entries from a directory inode.
 func readDir(f readerWriterAt, fsOffset int64, sb *superblock, dirInode *inode) ([]DirEntry, error) {
-	exts, err := dirInode.extents(f, fsOffset, sb)
+	exts, err := dirInode.readExtents(f, fsOffset, sb)
 	if err != nil {
 		return nil, err
 	}

@@ -12,11 +12,19 @@ import (
 func TestLookupPathAndSymlinkAdditionalPaths(t *testing.T) {
 	errBoom := errors.New("boom")
 
-	t.Run("readDir extents error", func(t *testing.T) {
+	t.Run("readDir reads a block-map inode", func(t *testing.T) {
+		// ext2/ext3 indirect block maps are now supported on read paths: an
+		// empty block-map inode lists as an empty directory rather than
+		// erroring. (readDir's error propagation is covered by the
+		// ReadHook-based subtests below.)
 		sb := &ext4.Superblock{BlockSize: 1024}
-		badDir := ext4.NewTestInode(ext4.RootIno, 256)
-		if _, err := ext4.ReadDir(&memFile{buf: make([]byte, 4096)}, 0, sb, badDir); err == nil {
-			t.Fatalf("expected readDir to fail when extents are unavailable")
+		bmDir := ext4.NewTestInode(ext4.RootIno, 256) // flags=0 => block map, size 0
+		entries, err := ext4.ReadDir(&memFile{buf: make([]byte, 4096)}, 0, sb, bmDir)
+		if err != nil {
+			t.Fatalf("readDir on empty block-map inode: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected empty listing, got %d entries", len(entries))
 		}
 	})
 
@@ -149,6 +157,12 @@ func TestLookupPathAndSymlinkAdditionalPaths(t *testing.T) {
 		ext4.SetSize(linkInode, uint64(len(longTarget)))
 		if err := ext4.SetInlineExtents(linkInode, []ext4.ExtentLeaf{{LogBlock: 0, PhysBlock: phys[0], Count: 1}}); err != nil {
 			t.Fatalf("SetInlineExtents: %v", err)
+		}
+		// Persist the inode so readFileData's on-disk re-read observes the real
+		// extent-mapped symlink; the ReadHook below then makes the target-block
+		// read the genuine failure cause.
+		if err := ext4.WriteInode(rw, 0, sb, linkInode); err != nil {
+			t.Fatalf("WriteInode: %v", err)
 		}
 
 		rw.ReadHook = func(off int64, _ []byte) error {
@@ -291,10 +305,17 @@ func TestInodeHelperErrorPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("readFileData extents error", func(t *testing.T) {
+	t.Run("readFileData reads a block-map inode", func(t *testing.T) {
+		// ext2/ext3 indirect block maps are read now: an empty block-map inode
+		// yields empty content rather than an error. (Block read-error
+		// propagation is covered by the extent-based subtest below.)
 		in := ext4.NewTestInode(1, 256)
-		if _, err := ext4.ReadFileData(&memFile{buf: make([]byte, 4096)}, 0, &ext4.Superblock{BlockSize: 1024}, in); err == nil {
-			t.Fatalf("expected readFileData to fail without extents")
+		data, err := ext4.ReadFileData(&memFile{buf: make([]byte, 4096)}, 0, &ext4.Superblock{BlockSize: 1024}, in)
+		if err != nil {
+			t.Fatalf("readFileData on empty block-map inode: %v", err)
+		}
+		if len(data) != 0 {
+			t.Fatalf("expected empty content, got %d bytes", len(data))
 		}
 	})
 
