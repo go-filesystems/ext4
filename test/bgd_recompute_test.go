@@ -421,12 +421,12 @@ func TestBGDMetadataCsumRecomputed64(t *testing.T) {
 
 func TestMultiGroupBGDRecompute(t *testing.T) {
 	// Create a filesystem sized to exceed one block-group so we have at
-	// least two groups. Use minimal extra blocks to avoid allocating more
-	// than necessary (fmtBlocksPerGroup + 1 blocks).
-	// Ensure the second group has more than the metadata blocks so there
-	// are actual free blocks to flip. gMeta (metadata blocks per non-zero
-	// group) is 18 in Format() constants, so use fmtBlocksPerGroup + gMeta + 1.
-	size := int64(4096) * int64(32768+18+1)
+	// least two groups, with enough blocks in the second group that it has
+	// free data blocks to flip after its metadata reservation. The second
+	// group is a sparse-super backup group, so it reserves a backup
+	// superblock + GDT + reserved-GDT blocks in addition to its bitmaps and
+	// inode table; give it a comfortable margin of free blocks.
+	size := int64(4096) * int64(32768+2048)
 	fs, cleanup := ext4.NewTempFSWithSize(t, size)
 	defer cleanup()
 
