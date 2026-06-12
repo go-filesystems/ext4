@@ -324,6 +324,12 @@ func readFileData(f readerWriterAt, fsOffset int64, sb *superblock, in *inode) (
 		}
 	}
 
+	// Inline data: content lives in the inode (i_block + system.data xattr)
+	// rather than in data blocks.
+	if in.isInline() {
+		return in.inlineData(f, fsOffset, sb)
+	}
+
 	ext, err := in.extents(f, fsOffset, sb)
 	if err != nil {
 		return nil, err
