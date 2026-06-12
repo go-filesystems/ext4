@@ -341,8 +341,12 @@ func readFileData(f readerWriterAt, fsOffset int64, sb *superblock, in *inode) (
 		}
 	}
 
-	// Classic ext2/ext3 indirect block map (EXT4_EXTENTS_FL clear). Inline
-	// data still flows through extents() below, which reports it explicitly.
+	// Inline data: content lives in the inode (i_block + system.data xattr)
+	// rather than in data blocks.
+	if in.isInline() {
+		return in.inlineData(f, fsOffset, sb)
+	}
+	// Classic ext2/ext3 indirect block map (EXT4_EXTENTS_FL clear).
 	if in.flags()&InodeFlagExtents == 0 && in.flags()&InodeFlagInlineData == 0 {
 		return in.blockMapData(f, fsOffset, sb)
 	}

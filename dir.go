@@ -78,6 +78,12 @@ func parseDirBlock(buf []byte) []DirEntry {
 
 // readDir reads all entries from a directory inode.
 func readDir(f readerWriterAt, fsOffset int64, sb *superblock, dirInode *inode) ([]DirEntry, error) {
+	// Inline directories store their entries inside the inode (i_block +
+	// system.data xattr) rather than in directory data blocks.
+	if dirInode.isInline() {
+		return inlineDirEntries(f, fsOffset, sb, dirInode)
+	}
+
 	exts, err := dirInode.readExtents(f, fsOffset, sb)
 	if err != nil {
 		return nil, err
