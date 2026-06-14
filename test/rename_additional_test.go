@@ -35,26 +35,19 @@ func TestRename_CrossParent_UpdateDotDot(t *testing.T) {
 		t.Fatalf("expected /src/sub to be gone")
 	}
 
-	entries, err := fs.ListDir("/dst/sub")
+	// ".." is omitted from ListDir, so verify the moved directory's on-disk
+	// ".." entry was repointed to the new parent by resolving it through path
+	// lookup: "/dst/sub/.." must resolve (via the ".." dirent) to "/dst".
+	dotdotStat, err := fs.Stat("/dst/sub/..")
 	if err != nil {
-		t.Fatalf("ListDir moved dir: %v", err)
-	}
-	var parentIno uint64
-	for _, e := range entries {
-		if e.Name() == ".." {
-			parentIno = e.Inode()
-			break
-		}
-	}
-	if parentIno == 0 {
-		t.Fatalf("'..' entry not found in moved dir")
+		t.Fatalf("Stat /dst/sub/..: %v", err)
 	}
 	dstStat, err := fs.Stat("/dst")
 	if err != nil {
 		t.Fatalf("Stat /dst: %v", err)
 	}
-	if parentIno != dstStat.Inode() {
-		t.Fatalf("updateDotDot failed: '..' inode = %d, want %d", parentIno, dstStat.Inode())
+	if dotdotStat.Inode() != dstStat.Inode() {
+		t.Fatalf("updateDotDot failed: '..' inode = %d, want %d", dotdotStat.Inode(), dstStat.Inode())
 	}
 }
 

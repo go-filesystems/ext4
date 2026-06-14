@@ -85,11 +85,13 @@ func TestFormat_ListDirRoot(t *testing.T) {
 	for _, e := range entries {
 		names[e.Name()] = true
 	}
-	if !names["."] {
-		t.Error("root dir missing '.' entry")
+	// ListDir omits the "." and ".." self/parent links (matching the other
+	// drivers and os.ReadDir); they must not appear in a listing.
+	if names["."] {
+		t.Error("root dir listing should not include '.' entry")
 	}
-	if !names[".."] {
-		t.Error("root dir missing '..' entry")
+	if names[".."] {
+		t.Error("root dir listing should not include '..' entry")
 	}
 }
 
