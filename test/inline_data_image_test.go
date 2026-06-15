@@ -182,8 +182,9 @@ func TestInlineData_RealImage(t *testing.T) {
 
 // TestInlineDir_RealImage_MatchesDebugfs formats an ext4 image with inline_data
 // enabled, creates an inline directory holding several named entries, and
-// asserts that ListDir on that directory returns exactly ".", ".." and the
-// named entries with the inode numbers debugfs reports for the same directory.
+// asserts that ListDir on that directory returns exactly the named entries
+// (ListDir omits "." and "..") with the inode numbers debugfs reports for the
+// same directory.
 //
 // This is the authoritative cross-check for the inline-directory parser: the
 // real kernel layout stores the parent inode in i_block[0:4], synthesises "."
@@ -263,14 +264,23 @@ func TestInlineDir_RealImage_MatchesDebugfs(t *testing.T) {
 		t.Skipf("/inlinedir (inode %d) is not inline; cannot validate inline-dir parser:\n%s", dirIno, statOut)
 	}
 
-	// Sanity: the expected set must contain ".", ".." and our three names.
+	// Sanity: debugfs always reports ".", ".." plus our three names. Verify
+	// debugfs really saw the inline directory we created before dropping the
+	// dot entries below.
 	for _, name := range []string{".", "..", "alpha", "beta", "gamma"} {
 		if _, ok := want[name]; !ok {
 			t.Fatalf("debugfs listing of inode %d missing %q; got %v", dirIno, name, want)
 		}
 	}
 
-	// ListDir must match debugfs exactly: same names, same inode numbers.
+	// ListDir deliberately omits "." and ".." (see commit "ext4: omit '.' and
+	// '..' from ListDir"), whereas debugfs reports them. Drop the dot entries
+	// from the expected set so the two views are compared on equal footing.
+	delete(want, ".")
+	delete(want, "..")
+
+	// ListDir must match debugfs exactly (minus the dot entries): same names,
+	// same inode numbers.
 	if len(got) != len(want) {
 		t.Fatalf("entry count mismatch: ListDir=%v debugfs=%v", got, want)
 	}
@@ -284,13 +294,12 @@ func TestInlineDir_RealImage_MatchesDebugfs(t *testing.T) {
 		}
 	}
 
-	// Spell out the most important invariants explicitly:
-	//   "." is the directory's own inode, ".." is the parent (root = 2).
-	if got["."] != dirIno {
-		t.Fatalf(`"." = inode %d, want own inode %d`, got["."], dirIno)
+	// ListDir must not surface the dot entries.
+	if _, ok := got["."]; ok {
+		t.Fatalf(`ListDir unexpectedly returned "." (= inode %d)`, got["."])
 	}
-	if got[".."] != 2 {
-		t.Fatalf(`".." = inode %d, want parent (root) inode 2`, got[".."])
+	if _, ok := got[".."]; ok {
+		t.Fatalf(`ListDir unexpectedly returned ".." (= inode %d)`, got[".."])
 	}
 
 	// Keep the result deterministic in failure messages.

@@ -12,6 +12,15 @@ import (
 // Stat, DeleteFile, DeleteDir, Rename, ReadLink, WriteFile, ReadFile. These
 // are thin wrappers but had 0% coverage in internal-only profiles.
 func TestExt4FS_HighLevelOps(t *testing.T) {
+	// This exercise drives the full journalled write/delete/rename path and is
+	// dominated by real-time journal commit grace periods (~18s of wall clock).
+	// Under QEMU emulation that wall time stacks on top of CPU emulation
+	// overhead, so skip it in -short mode (the emulated arch jobs run -short);
+	// the fast LE-decoder tests still run there, which is what exercises the
+	// big-endian (s390x) byte-order path.
+	if testing.Short() {
+		t.Skip("skipping slow journalled round-trip in -short mode")
+	}
 	fs, cleanup := NewTempFS(t)
 	defer cleanup()
 
