@@ -103,6 +103,19 @@ func makeSymlink(f readerWriterAt, fsOffset int64, sb *superblock, target, linkP
 			return err
 		}
 		newIno.setBlocks512(sb.BlockSize / 512)
+
+		// The inode is allocated before the data block, so allocInode snapshots
+		// and writes the superblock while its free-block count is still one too
+		// high. allocBlocks then decrements the in-memory count and writes the
+		// corrected superblock, but the two superblock writes (both at the fixed
+		// offset 1024) are not ordered against each other by the commit
+		// dispatcher, so the stale value can land last and leave s_free_blocks
+		// off by one versus the block bitmap (e2fsck: "Free blocks count
+		// wrong"). Reconcile the on-disk superblock from the now-correct
+		// in-memory count, mirroring delete.go's post-mutation writeSuperblock.
+		if err := writeSuperblock(f, fsOffset, sb); err != nil {
+			return err
+		}
 	}
 
 	if err := writeInode(f, fsOffset, sb, newIno); err != nil {
