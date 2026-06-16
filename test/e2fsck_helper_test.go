@@ -55,9 +55,21 @@ func runE2fsck(t *testing.T, img string) {
 	}
 	// Some old e2fsck builds exit 0 but still log ERROR: lines for soft
 	// problems. Treat any such line as a failure to match the cross-compat
-	// audit expectation.
-	if bytes.Contains(out, []byte("ERROR:")) {
-		t.Fatalf("e2fsck reported ERROR: lines on %s:\n%s", img, string(out))
+	// audit expectation. Also catch the diagnostics e2fsck prints for
+	// inconsistencies it *would* repair (e.g. "Free blocks count wrong",
+	// "Free inodes count wrong") and the interactive "Fix? no" / "Fix<y>?"
+	// prompts that accompany them: under `-n` these accompany a non-zero
+	// exit, but we assert on them explicitly so a future change that
+	// swallows the exit code can never let such an image be reported clean.
+	for _, marker := range [][]byte{
+		[]byte("ERROR:"),
+		[]byte("count wrong"),
+		[]byte("Fix? no"),
+		[]byte("Fix<y>?"),
+	} {
+		if bytes.Contains(out, marker) {
+			t.Fatalf("e2fsck reported %q on %s:\n%s", string(marker), img, string(out))
+		}
 	}
 }
 
