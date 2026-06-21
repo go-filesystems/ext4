@@ -1,7 +1,7 @@
 //go:build stress
 // +build stress
 
-// stress_qcow2.go — native (pure-Go) image converter for the stress build.
+// stress_qcow2_test.go — native (pure-Go) image converter for the stress build.
 //
 // Under the `stress` build tag we use the github.com/go-diskimages/qcow2
 // sibling module's pure-Go ConvertToRaw, the same converter the rest of the
