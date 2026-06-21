@@ -55,9 +55,21 @@ func runE2fsck(t *testing.T, img string) {
 	}
 	// Some old e2fsck builds exit 0 but still log ERROR: lines for soft
 	// problems. Treat any such line as a failure to match the cross-compat
-	// audit expectation.
-	if bytes.Contains(out, []byte("ERROR:")) {
-		t.Fatalf("e2fsck reported ERROR: lines on %s:\n%s", img, string(out))
+	// audit expectation. Also catch the diagnostics e2fsck prints for
+	// inconsistencies it *would* repair (e.g. "Free blocks count wrong",
+	// "Free inodes count wrong") and the interactive "Fix? no" / "Fix<y>?"
+	// prompts that accompany them: under `-n` these accompany a non-zero
+	// exit, but we assert on them explicitly so a future change that
+	// swallows the exit code can never let such an image be reported clean.
+	for _, marker := range [][]byte{
+		[]byte("ERROR:"),
+		[]byte("count wrong"),
+		[]byte("Fix? no"),
+		[]byte("Fix<y>?"),
+	} {
+		if bytes.Contains(out, marker) {
+			t.Fatalf("e2fsck reported %q on %s:\n%s", string(marker), img, string(out))
+		}
 	}
 }
 
@@ -145,6 +157,35 @@ func TestE2fsckAfterMkDir(t *testing.T) {
 	if err := fs.WriteFile("/sub/nested.txt", []byte("nested"), 0o644); err != nil {
 		fs.Close()
 		t.Fatalf("WriteFile in subdir: %v", err)
+	}
+	flushAndE2fsck(t, fs, img)
+}
+
+// TestE2fsckAfterSlowSymlink: Format → create a >60-byte (block-backed, "slow")
+// symlink → close → e2fsck. Regression guard for the off-by-one free-block
+// count the slow-symlink path used to leave in the superblock; previously
+// e2fsck reported "Free blocks count wrong". Also creates a short (fast,
+// inline) symlink and a normal file in the same image to confirm those paths
+// stay clean alongside it.
+func TestE2fsckAfterSlowSymlink(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "symlink.img")
+	fs := formatImg(t, img, 20*1024*1024)
+	slowTarget := "/" + strings.Repeat("abcdefghij/", 12) + "leaf" // 137 bytes > 60
+	if len(slowTarget) <= 60 {
+		fs.Close()
+		t.Fatalf("slow-symlink target too short (%d) to exercise the block path", len(slowTarget))
+	}
+	if err := fs.Symlink(slowTarget, "/slowlink"); err != nil {
+		fs.Close()
+		t.Fatalf("Symlink (slow): %v", err)
+	}
+	if err := fs.Symlink("short", "/fastlink"); err != nil {
+		fs.Close()
+		t.Fatalf("Symlink (fast): %v", err)
+	}
+	if err := fs.WriteFile("/regular.txt", []byte("plain file"), 0o644); err != nil {
+		fs.Close()
+		t.Fatalf("WriteFile: %v", err)
 	}
 	flushAndE2fsck(t, fs, img)
 }
