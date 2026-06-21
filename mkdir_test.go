@@ -5,28 +5,6 @@ import (
 	"testing"
 )
 
-// freeBlocksFromBitmaps recomputes the total free-block count by summing the
-// zero bits across every block group's on-disk block bitmap. This is the same
-// quantity e2fsck recomputes and compares against the superblock's
-// s_free_blocks_count.
-func freeBlocksFromBitmaps(t *testing.T, fs *ext4FS) uint64 {
-	t.Helper()
-	sb := fs.sb
-	var total uint64
-	for g := uint32(0); g < sb.numBlockGroups(); g++ {
-		d, err := readBGD(fs.f, fs.partOffset, sb, g)
-		if err != nil {
-			t.Fatalf("readBGD %d: %v", g, err)
-		}
-		bmap, err := readBitmap(fs.f, fs.partOffset, sb, d.BlockBitmapBlock)
-		if err != nil {
-			t.Fatalf("readBitmap %d: %v", g, err)
-		}
-		total += uint64(countZeroBits(bmap, int(sb.BlocksPerGroup)))
-	}
-	return total
-}
-
 // TestMkDirFreeBlockCount guards against the non-journal makeDir path leaving
 // the superblock's free-block count out of sync with the block bitmap. A
 // directory creation allocates the inode first and the directory data block
