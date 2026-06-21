@@ -19,9 +19,20 @@ import (
 	"sync/atomic"
 	"testing"
 
-	disk_qcow2 "github.com/go-diskimages/qcow2"
 	ext4 "github.com/go-filesystems/ext4"
 )
+
+// stressConvertToRaw converts a qcow2 / .img source into the raw image at dst.
+//
+// The conversion is routed through a package-level variable so the heavy
+// github.com/go-diskimages/qcow2 sibling module is pulled into the build graph
+// only under the `stress` build tag (see stress_qcow2_test.go), where the
+// native pure-Go converter is wired in. The default build (and therefore the
+// CI cross-compile / vet steps, which do not check out the qcow2 sibling) uses
+// the qemu-img fallback in stress_convert_test.go instead. Both implementations are
+// runtime-equivalent for these image tests, which already skip when no image
+// is present in ~/.mock/cache.
+var stressConvertToRaw = stressConvertToRawDefault
 
 // ──────────────────── image catalogue ──────────────────────────────────────
 
@@ -134,8 +145,8 @@ func toStressRaw(t *testing.T, src string, format string) string {
 	ri, rerr := os.Stat(raw)
 	if rerr != nil || (qi != nil && ri.ModTime().Before(qi.ModTime())) {
 		t.Logf("converting %s → raw", filepath.Base(src))
-		if err := disk_qcow2.ConvertToRaw(src, raw, os.Stdout); err != nil {
-			t.Fatalf("disk_qcow2.ConvertToRaw: %v", err)
+		if err := stressConvertToRaw(src, raw, os.Stdout); err != nil {
+			t.Fatalf("stressConvertToRaw: %v", err)
 		}
 	}
 	return raw
@@ -438,8 +449,8 @@ func TestStress_Concurrent(t *testing.T) {
 			raw = src
 		} else if _, err := os.Stat(raw); err != nil {
 			t.Logf("converting %s → raw…", filepath.Base(src))
-			if err := disk_qcow2.ConvertToRaw(src, raw, os.Stdout); err != nil {
-				t.Fatalf("disk_qcow2.ConvertToRaw: %v", err)
+			if err := stressConvertToRaw(src, raw, os.Stdout); err != nil {
+				t.Fatalf("stressConvertToRaw: %v", err)
 			}
 		}
 
