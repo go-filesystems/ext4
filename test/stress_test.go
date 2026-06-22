@@ -418,13 +418,13 @@ func TestStress_Concurrent(t *testing.T) {
 	// test under 30 s on a contemporary laptop while still spinning up enough
 	// goroutines to exercise the lock paths inside the ext4 driver.
 	const (
-		concRWWorkers     = 16
+		concRWWorkers      = 16
 		concRWOpsPerWorker = 80 // 16 × 80 = 1,280 mixed ops
 
-		readOnlyWorkers     = 16
+		readOnlyWorkers      = 16
 		readOnlyOpsPerWorker = 80
 
-		writeHammerWorkers     = 4
+		writeHammerWorkers         = 4
 		writeHammerWritesPerWorker = 100 // 4 × 100 = 400 write+readback cycles
 	)
 

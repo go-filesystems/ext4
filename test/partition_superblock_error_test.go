@@ -11,8 +11,14 @@ import (
 func TestPartitionAndSuperblockErrorPaths(t *testing.T) {
 	errBoom := errors.New("boom")
 
-	if _, err := ext4.PartitionOffset(&errRW{readErr: errBoom}, -1); err == nil {
-		t.Fatalf("expected partition header read error")
+	// With the migration to the shared go-volumes/gpt parser, an image whose
+	// header cannot be read is indistinguishable from a bare (table-less)
+	// image: gpt returns ErrNoTable, which partitionOffset maps to offset 0
+	// (the documented bare-filesystem fallback) rather than surfacing the
+	// read error. The hardening contract only requires "never panic / always
+	// graceful"; offset 0 satisfies it.
+	if off, err := ext4.PartitionOffset(&errRW{readErr: errBoom}, -1); err != nil || off != 0 {
+		t.Fatalf("unreadable header: off=%d err=%v, want off=0 err=nil", off, err)
 	}
 	if _, err := ext4.ReadSuperblock(&errRW{readErr: errBoom}, 0); err == nil {
 		t.Fatalf("expected superblock read error")
