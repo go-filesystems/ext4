@@ -29,10 +29,14 @@ jobs:
     runs-on: ${{ matrix.runs-on }}
     env:
       # Coverage floor enforced on the combined (-coverpkg=./...) profile.
-      # Measured at 70.6% on a full e2fsprogs-backed run with the network
-      # image tests skipped (the CI condition); the floor keeps margin for
-      # run-to-run variance from the skip-on-missing-tool/image tests.
-      COVERAGE_FLOOR: "65.0"
+      # Measured at ~70.1% on a full e2fsprogs-backed run with the network
+      # image tests skipped (the CI condition). The number floats by a few
+      # tenths of a percent run-to-run because several journal/allocator tests
+      # cover timing-dependent branches, so the floor sits ~1% below the
+      # observed minimum. See TEST_COVERAGE.md for the residual-uncovered
+      # inventory (deep concurrency, defensive branches, and a couple of
+      # currently-unwired helpers) that keeps this short of 100%.
+      COVERAGE_FLOOR: "69.0"
     steps:
       - name: Checkout ext4
         uses: actions/checkout@v4
