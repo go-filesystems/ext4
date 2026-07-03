@@ -39,14 +39,14 @@ jobs:
       COVERAGE_FLOOR: "69.0"
     steps:
       - name: Checkout ext4
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ext4
 
       # go.mod carries `replace github.com/go-filesystems/interface =>
       # ../interface`, so the sibling module must sit next to this one.
       - name: Checkout interface (sibling replace target)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: go-filesystems/interface
           path: interface
@@ -57,7 +57,7 @@ jobs:
           sudo apt-get install -y e2fsprogs
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: stable
           check-latest: true
@@ -126,18 +126,18 @@ jobs:
             qemu: qemu
     steps:
       - name: Checkout ext4
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ext4
 
       - name: Checkout interface (sibling replace target)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: go-filesystems/interface
           path: interface
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: stable
           check-latest: true
