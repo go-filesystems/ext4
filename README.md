@@ -24,6 +24,11 @@ Pure-Go read/write access to ext4 filesystem images.
 
 This package supports extents, 64-bit block numbers, flex_bg, directory
 htree indexing, CRC32c metadata checksums, and automatic partition detection.
+It also reads the classic ext2/ext3 indirect **block map** (single-, double-
+and triple-indirect), **inline data** (small files and directories stored in
+the inode/xattr area), and **sparse files** (unallocated holes read back as
+zeros) — verified against real `mke2fs`-produced ext2/ext3/ext4 images across
+block sizes (see `testdata/`).
 
 ## Production-readiness improvements (recent)
 
@@ -66,9 +71,10 @@ https://docs.kernel.org/filesystems/ext4/
 |---|---:|---|
 | Open / Close | ✅ | Supports partitioned images (MBR/GPT auto-detect) |
 | Format | ✅ | Creates ext4 images; some cross-check tests require `mke2fs` |
-| ReadFile / WriteFile | ✅ | Full file I/O supported (extents, sparse writes) |
+| ReadFile / WriteFile | ✅ | Full file I/O (extents and ext2/3 block map); sparse-file holes read back as zeros |
+| Inline data | ✅ | Reads small files and directories stored inline in the inode/xattr area |
 | MkDir / Delete / Rename | ✅ | Directory and rename operations implemented |
-| ReadLink / Symlinks | ✅ | Supported |
+| ReadLink / Symlinks | ✅ | Fast (in-inode) and slow (out-of-line) targets |
 | Metadata serialization (BGD/bitmaps/inode-table) | ✅ | Writes + `metadata_csum` supported |
 | Online resize (`Grow`) | ✅ | Adds block groups and updates superblock/BGD |
 | IOCTLs (GetFlags/SetFlags) | ✅ | Tooling-level ioctl support implemented |
