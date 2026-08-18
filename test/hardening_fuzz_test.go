@@ -61,16 +61,12 @@ func (d *memBlockDevice) Close() error         { return nil }
 // usable as a healthy fuzz seed and as a base to mutate.
 func validImageBytes(t testing.TB) []byte {
 	t.Helper()
-	st, ok := t.(*testing.T)
-	if !ok {
-		t.Skip("validImageBytes needs *testing.T")
-	}
-	fs, cleanup := ext4.NewTempFSWithSize(st, 4*1024*1024)
+	fs, cleanup := ext4.NewTempFSWithSize(t, 4*1024*1024)
 	if err := fs.WriteFile("/seed.txt", []byte("hello hardening world"), 0o644); err != nil {
 		cleanup()
 		t.Fatalf("seed WriteFile: %v", err)
 	}
-	h := ext4.CloneFSImage(st, fs)
+	h := ext4.CloneFSImage(t, fs)
 	cleanup()
 	return append([]byte(nil), ext4.HookMemFileBuf(h)...)
 }
