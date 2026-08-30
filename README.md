@@ -72,6 +72,7 @@ https://docs.kernel.org/filesystems/ext4/
 | Open / Close | ✅ | Supports partitioned images (MBR/GPT auto-detect) |
 | Format | ✅ | Creates ext4 images; some cross-check tests require `mke2fs` |
 | ReadFile / WriteFile | ✅ | Full file I/O (extents and ext2/3 block map); sparse-file holes read back as zeros |
+| Read at an offset | ✅ | `OpenFile(path)` → `io.ReaderAt` + `Size()` (`filesystem.Opener` / `filesystem.File`). Snapshots the inode's block map — extents, ext2/3 indirect map, or inline data — and reads no file data at open, so a 4 KiB read out of a 4 GiB file costs 4 KiB. Holes read as zeros, as `ReadFile` produces them |
 | Inline data | ✅ | Reads small files and directories stored inline in the inode/xattr area |
 | MkDir / Delete / Rename | ✅ | Directory and rename operations implemented |
 | ReadLink / Symlinks | ✅ | Fast (in-inode) and slow (out-of-line) targets |
@@ -81,6 +82,37 @@ https://docs.kernel.org/filesystems/ext4/
 | CheckImage / RepairImage hooks | ✅ | Programmatic fsck/repair entry points |
 | Concurrency hardening | ✅ | Per-group locks for bitmap/BGD/inode-table |
 | Test-only tracing | ✅ | Heavy tracing under `//go:build test` for diagnostics |
+
+## Reading part of a file
+
+`ReadFile` returns the whole file, which is unusable for anything serving reads on
+demand — a mount, an NFS or 9P export — where a 4 KiB request out of a 4 GiB file
+must not allocate 4 GiB. The driver implements the optional
+[`filesystem.Opener`](https://github.com/go-filesystems/interface) capability:
+
+```go
+if o, ok := fs.(filesystem.Opener); ok {
+    f, err := o.OpenFile("/var/lib/big.img")
+    if err != nil { /* ... */ }
+    defer f.Close()
+
+    buf := make([]byte, 4096)
+    n, err := f.ReadAt(buf, 1<<30) // only the bytes asked for
+    _, _ = n, err
+    _ = f.Size()                   // i_size, read at open; touches no data
+}
+```
+
+`OpenFile` snapshots the inode's block map — extent leaves for ext4, the synthesised
+equivalent for the ext2/ext3 indirect map, or the inline bytes for an inline-data
+inode — using the same `inode.readExtents` the `ReadFile` path uses, under the same
+inode lock. `ReadAt` binary-searches that map, reads whole contiguous runs in one go,
+and serves holes as zeros without touching the device. It follows `io.ReaderAt`
+exactly (`n < len(p)` only with a non-nil error, `io.EOF` at the end) and is safe to
+call concurrently.
+
+A `File` is a **snapshot**: it describes the file as it was when opened. A file
+rewritten through the same `Filesystem` afterwards must be reopened.
 
 ## Limitations & cautions
 
