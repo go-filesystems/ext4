@@ -73,6 +73,7 @@ https://docs.kernel.org/filesystems/ext4/
 | Format | ✅ | Creates ext4 images; some cross-check tests require `mke2fs` |
 | ReadFile / WriteFile | ✅ | Full file I/O (extents and ext2/3 block map); sparse-file holes read back as zeros |
 | Read at an offset | ✅ | `OpenFile(path)` → `io.ReaderAt` + `Size()` (`filesystem.Opener` / `filesystem.File`). Snapshots the inode's block map — extents, ext2/3 indirect map, or inline data — and reads no file data at open, so a 4 KiB read out of a 4 GiB file costs 4 KiB. Holes read as zeros, as `ReadFile` produces them |
+| Write at an offset | ✅ | `OpenFile(path)` → `io.WriterAt` + `Truncate` + `Sync` (`filesystem.WritableFile`), for extent-mapped inodes. Writes only the bytes given, allocates only the blocks the range touches, and **keeps the file sparse**: a write far past the end leaves the gap a hole. Inline-data and ext2/3 block-map inodes come back as a plain read-only `File`, so a caller falls back rather than failing |
 | Inline data | ✅ | Reads small files and directories stored inline in the inode/xattr area |
 | MkDir / Delete / Rename | ✅ | Directory and rename operations implemented |
 | ReadLink / Symlinks | ✅ | Fast (in-inode) and slow (out-of-line) targets |
@@ -111,8 +112,52 @@ and serves holes as zeros without touching the device. It follows `io.ReaderAt`
 exactly (`n < len(p)` only with a non-nil error, `io.EOF` at the end) and is safe to
 call concurrently.
 
-A `File` is a **snapshot**: it describes the file as it was when opened. A file
-rewritten through the same `Filesystem` afterwards must be reopened.
+A read-only `File` is a **snapshot**: it describes the file as it was when opened. A
+file rewritten through the same `Filesystem` afterwards must be reopened.
+
+## Writing part of a file
+
+`WriteFile` replaces a whole file — and this driver's `WriteFile` frees every block
+of it and reallocates them — so a positional write expressed as `ReadFile` + splice
++ `WriteFile` costs O(filesize) *per request*, and a client writing a file in
+fixed-size blocks pays that per block. Measured over a real Linux kernel NFS mount
+against a driver without a positional write, 2 MiB in 64 KiB blocks took 23 s
+(90 kB/s), and a `soft,timeo=50` mount gave up with `EIO` partway through.
+
+The `File` returned by `OpenFile` is therefore also a
+[`filesystem.WritableFile`](https://github.com/go-filesystems/interface) — when the
+inode's layout allows it:
+
+```go
+if o, ok := fs.(filesystem.Opener); ok {
+    f, _ := o.OpenFile("/var/lib/big.img")
+    defer f.Close()
+    if w, ok := f.(filesystem.WritableFile); ok {
+        _, err := w.WriteAt(buf, 1<<30) // io.WriterAt semantics, exactly
+        _ = w.Truncate(1 << 20)         // grow is free; shrink frees blocks
+        _ = w.Sync()                    // fsync(2) on a file-backed image
+        _ = err
+    }
+    // otherwise: ReadFile, splice, WriteFile — correct, and quadratic.
+}
+```
+
+`WriteAt` reuses the extent map resolved at open, turning an offset into a physical
+block by binary search, and allocates only for the blocks the written range actually
+covers. **Sparseness is preserved**: a write far past the end allocates nothing for
+the gap, which stays a hole, costs no space, and reads back as zeros through both
+`ReadAt` and `ReadFile`. That is what ext4 means by a sparse file, and it is the
+one place this driver's `WriteAt` deliberately differs from FAT's, which has to
+allocate the gap.
+
+**Two layouts come back as a plain, read-only `File`**: an inline-data inode, and
+the classic ext2/ext3 indirect block map, whose growth would mean allocating
+indirect blocks that no write path in this package has ever produced. They are
+refused *at the probe* rather than from `WriteAt`, because the type assertion is a
+caller's only chance to learn the truth before it commits to a strategy — a `File`
+that satisfied the interface and then failed every call would force a server to
+discover the limitation one failed request at a time. Refusing at the probe is the
+difference between "slower" and "broken".
 
 ## Limitations & cautions
 

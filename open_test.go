@@ -14,6 +14,21 @@ import (
 	"github.com/go-volumes/safeio"
 )
 
+// concreteFile unwraps whichever File OpenFile handed back to the driver's own
+// type. Two layouts — inline data and the ext2/ext3 indirect block map — come
+// back wrapped in readOnlyFile because they cannot be written at an offset,
+// and a test that inspects the internals has to see through that wrapper
+// without caring which one it got.
+func concreteFile(f filesystem.File) *ext4File {
+	switch v := f.(type) {
+	case *ext4File:
+		return v
+	case *readOnlyFile:
+		return v.inner
+	}
+	return nil
+}
+
 // probeOpener asserts the capability is reachable the way a caller reaches it —
 // through the filesystem.Filesystem interface Open returns, not the concrete
 // type — and hands back the Opener.
@@ -77,7 +92,7 @@ func checkAgainstReadFile(t *testing.T, fsIfc filesystem.Filesystem, path string
 	if size > 0 {
 		offsets[size-1] = true
 	}
-	if ef, ok := f.(*ext4File); ok {
+	if ef := concreteFile(f); ef != nil {
 		bs := ef.blockSize
 		for _, e := range ef.extents {
 			for _, b := range []int64{int64(e.LogBlock) * bs, (int64(e.LogBlock) + int64(e.Count)) * bs} {
@@ -158,7 +173,10 @@ func TestOpenFileFixtureCorpus(t *testing.T) {
 				if err != nil {
 					t.Fatalf("OpenFile(%s): %v", p, err)
 				}
-				ef := f.(*ext4File)
+				ef := concreteFile(f)
+				if ef == nil {
+					t.Fatalf("OpenFile(%s) returned an unexpected File type %T", p, f)
+				}
 				t.Logf("%s %s: inline=%v extents=%d size=%d blockSize=%d",
 					img, p, ef.inline != nil, len(ef.extents), ef.size, ef.blockSize)
 				f.Close()

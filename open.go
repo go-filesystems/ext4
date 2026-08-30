@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"sync"
 	"sync/atomic"
 
 	filesystem "github.com/go-filesystems/interface"
@@ -60,6 +61,11 @@ type ext4File struct {
 	blockSize int64
 	inodeNum  uint32
 	closed    atomic.Bool
+	// mu guards extents and size against a concurrent extend or truncate
+	// through this File (see writeat.go). It is separate from the
+	// filesystem's mu, which orders this File against structural changes
+	// made elsewhere.
+	mu sync.RWMutex
 }
 
 var _ filesystem.File = (*ext4File)(nil)
@@ -104,12 +110,17 @@ func (fs *ext4FS) OpenFile(path string) (filesystem.File, error) {
 func (fs *ext4FS) newFile(rw readerWriterAt, in *inode) (filesystem.File, error) {
 	// Inline data is bounded by one block and lives in the inode, so it is
 	// simply materialised: there is no block map to search.
+	//
+	// It is also the first of the two layouts this driver cannot write
+	// positionally, so the File comes back wrapped as read-only — see
+	// readOnlyFile in writeat.go for why the distinction is made on the File
+	// rather than refused later from WriteAt.
 	if in.isInline() {
 		data, err := in.inlineData(rw, fs.partOffset, fs.sb)
 		if err != nil {
 			return nil, err
 		}
-		return &ext4File{fs: fs, inline: data, size: int64(len(data)), blockSize: int64(fs.sb.BlockSize), inodeNum: in.num}, nil
+		return &readOnlyFile{inner: &ext4File{fs: fs, inline: data, size: int64(len(data)), blockSize: int64(fs.sb.BlockSize), inodeNum: in.num}}, nil
 	}
 
 	ext, err := in.readExtents(rw, fs.partOffset, fs.sb)
@@ -156,17 +167,33 @@ func (fs *ext4FS) newFile(rw readerWriterAt, in *inode) (filesystem.File, error)
 	copy(sorted, ext)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LogBlock < sorted[j].LogBlock })
 
-	return &ext4File{
+	file := &ext4File{
 		fs:        fs,
 		extents:   sorted,
 		size:      size,
 		blockSize: int64(fs.sb.BlockSize),
 		inodeNum:  in.num,
-	}, nil
+	}
+	// The classic ext2/ext3 indirect block map is the second layout this
+	// driver cannot write positionally: growing one means allocating indirect
+	// blocks, which no write path in this package has ever done (writeFile
+	// only ever produces extent-mapped inodes, and freeInodeBlocks skips block
+	// maps outright). Reading one is fully supported, so it comes back as a
+	// plain, read-only File and the caller falls back — which is exactly what
+	// the capability probe is for.
+	if in.flags()&InodeFlagExtents == 0 {
+		return &readOnlyFile{inner: file}, nil
+	}
+	return file, nil
 }
 
-// Size returns the file's length in bytes, i_size as read at OpenFile. No I/O.
-func (f *ext4File) Size() int64 { return f.size }
+// Size returns the file's length in bytes: i_size as read at OpenFile, then
+// tracking every extend or truncate performed through this File. No I/O.
+func (f *ext4File) Size() int64 {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.size
+}
 
 // Close releases the File. ext4 files hold no per-file handle — the image
 // handle stays owned by the Filesystem — so Close only marks the File unusable,
@@ -199,6 +226,10 @@ func (f *ext4File) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, fmt.Errorf("ext4: ReadAt: negative offset %d", off)
 	}
+	// The File's own lock keeps a read from observing a half-applied extend
+	// or truncate; it is shared, so parallel ReadAt calls stay parallel.
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if off >= f.size {
 		return 0, io.EOF
 	}
