@@ -240,7 +240,15 @@ func parseExtentRoot(f readerWriterAt, fsOffset int64, sb *superblock, buf []byt
 		return nil, fmt.Errorf("ext4: extent tree depth %d exceeds max %d in inode %d", rootDepth, maxExtentDepth, inodeNum)
 	}
 	var visited safeio.VisitSet
-	return parseExtentNode(f, fsOffset, sb, buf, inodeNum, inodeRaw, rootDepth, &visited)
+	leaves, err := parseExtentNode(f, fsOffset, sb, buf, inodeNum, inodeRaw, rootDepth, &visited)
+	if err != nil {
+		return nil, err
+	}
+	// Overlapping leaves make every consumer do the same work once per leaf.
+	if err := validateExtents(leaves, inodeNum); err != nil {
+		return nil, err
+	}
+	return leaves, nil
 }
 
 // parseExtentNode parses a 60-byte (or block-sized) extent node buffer.
@@ -427,18 +435,24 @@ func readFileData(f readerWriterAt, fsOffset int64, sb *superblock, in *inode) (
 	// no blocks. Bounding by extent bytes would reject valid sparse files
 	// (e.g. `truncate -s 1M` then a 3-byte tail write yields one extent but a
 	// 1 MiB i_size). The block-map path already trusts i_size the same way.
-	max := int64(sb.BlocksCount) * int64(sb.BlockSize)
-	if max <= 0 {
+	//
+	// The declared size is itself read from the image, so it is not enough:
+	// a 1 KiB image may declare 2^40 blocks. The ceiling is therefore the
+	// smaller of the declared size and the read limit (DefaultMaxReadSize, or
+	// SetMaxReadSize), checked before the buffer exists. Materialising more
+	// than that is what OpenFile is for.
+	var fallback int64
+	if _, known := sb.declaredBytes(); !known {
 		// The filesystem size is unknown (BlocksCount == 0 — only synthetic
 		// superblocks, never a real image). Fall back to the highest logical
 		// byte the extents can address so the allocation is still bounded.
 		for _, e := range ext {
-			if end := (int64(e.LogBlock) + int64(e.Count)) * int64(sb.BlockSize); end > max {
-				max = end
+			if end := (int64(e.LogBlock) + int64(e.Count)) * int64(sb.BlockSize); end > fallback {
+				fallback = end
 			}
 		}
 	}
-	out, err := safeio.MakeBytes(int64(in.size), max)
+	out, err := safeio.MakeBytes(clampInt64(in.size), sb.fileSizeCeiling(fallback))
 	if err != nil {
 		return nil, fmt.Errorf("ext4: inode %d size %d invalid: %w", in.num, in.size, err)
 	}

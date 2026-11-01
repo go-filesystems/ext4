@@ -84,6 +84,24 @@ https://docs.kernel.org/filesystems/ext4/
 | Concurrency hardening | ✅ | Per-group locks for bitmap/BGD/inode-table |
 | Test-only tracing | ✅ | Heavy tracing under `//go:build test` for diagnostics |
 
+## Untrusted input
+
+An image is attacker-controlled bytes. Every allocation and every walk the driver
+sizes from a value read off the image is checked against what the image can hold
+**before** it happens (tests assert `< 1 MiB` allocated for each refused road):
+
+| Input | Bound |
+|---|---|
+| file `i_size` for `ReadFile` | the smaller of the declared filesystem size and `DefaultMaxReadSize` (1 GiB); `fs.(interface{ SetMaxReadSize(int64) })` changes it; larger files are read with `OpenFile`; refused with `ErrTooLarge` |
+| ext2/ext3 indirect block map | walked as a tree (holes cost nothing); every pointer, indirect blocks included, is charged against the blocks the device holds; an indirect block reached twice is refused |
+| extent leaves | overlapping leaves (logical or physical) are refused: each would make a reader decode the same blocks again, so a few KiB of leaves could cost gigabytes |
+| sidecar journal | descriptor count and each data length are checked against the bytes the journal file still holds before any buffer is sized from them |
+| extent tree | depth ≤ 5, strictly decreasing, no block visited twice |
+
+Fuzz targets: `FuzzBlockMapExtents`, `FuzzExtentList`, `FuzzJournalSidecar` (these
+assert the allocation stays proportional to the input), plus the older
+`FuzzOpenAndRead`, `FuzzParseExtentNode`, `FuzzParseDirBlock`, `FuzzReadSuperblock`.
+
 ## Reading part of a file
 
 `ReadFile` returns the whole file, which is unusable for anything serving reads on

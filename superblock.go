@@ -33,6 +33,12 @@ type superblock struct {
 	LogGroupsPerFlex uint8  // groups per flex group (flex_bg)
 	ChecksumSeed     uint32 // pre-computed or derived from UUID
 	ChecksumType     uint8  // 1 = CRC32c
+
+	// maxRead is the ceiling on a materialised file (0 = DefaultMaxReadSize);
+	// accessed atomically. deviceBytes is the size of the backing device from
+	// the partition start, when known (0 = unknown). Neither is on disk.
+	maxRead     int64
+	deviceBytes int64
 }
 
 // readSuperblock reads and decodes the ext4 superblock. The superblock always
