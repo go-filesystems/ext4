@@ -6,7 +6,7 @@ module github.com/go-filesystems/ext4/benchmarks
 go 1.27.1
 
 require (
-	github.com/go-filesystems/ext4 v0.3.0
+	github.com/go-filesystems/ext4 v0.4.0
 	github.com/go-filesystems/interface v0.5.0
 )
 
