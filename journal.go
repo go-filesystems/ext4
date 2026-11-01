@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-volumes/safeio"
 )
 
 // Minimal on-disk journal format (sidecar file): this implementation writes
@@ -1253,6 +1255,18 @@ func (j *Journal) ReplayOnOpen() error {
 		if err := binary.Read(j.js, binary.LittleEndian, &nDesc); err != nil {
 			return err
 		}
+		// nDesc and every descriptor's length come from the file being
+		// replayed. Nothing may be allocated from them until they are checked
+		// against the bytes the file still holds: a 16-byte journal declaring
+		// 2^24 descriptors, or one descriptor declaring 1 GiB, otherwise costs
+		// 256 MiB or 1 GiB before the first read fails.
+		rem, err := journalRemaining(j.js)
+		if err != nil {
+			return err
+		}
+		if rem, err = journalReserveDescs(rem, nDesc); err != nil {
+			return fmt.Errorf("journal replay: transaction %d: %w", seq, err)
+		}
 		// Read descriptors
 		descs := make([]struct {
 			blk uint64
@@ -1270,6 +1284,10 @@ func (j *Journal) ReplayOnOpen() error {
 		datas := make([][]byte, nDesc)
 		for i := uint32(0); i < nDesc; i++ {
 			l := descs[i].ln
+			if uint64(l) > uint64(rem) {
+				return fmt.Errorf("journal replay: transaction %d: descriptor %d declares %d bytes, %d remain in the journal: %w", seq, i, l, rem, safeio.ErrTooLarge)
+			}
+			rem -= int64(l)
 			buf := make([]byte, l)
 			if _, err := io.ReadFull(j.js, buf); err != nil {
 				return err
@@ -1366,6 +1384,17 @@ func (j *Journal) initNextSeq() error {
 		if err := binary.Read(j.js, binary.LittleEndian, &nDesc); err != nil {
 			return err
 		}
+		// Sizes come from the file: check them against the bytes it still
+		// holds before allocating (see ReplayOnOpen). A transaction that
+		// cannot fit is a truncated or hostile tail, which ends the scan like
+		// any other unreadable tail does.
+		rem, err := journalRemaining(j.js)
+		if err != nil {
+			return err
+		}
+		if rem, err = journalReserveDescs(rem, nDesc); err != nil {
+			break
+		}
 		// Read descriptors
 		descs := make([]struct {
 			blk uint64
@@ -1381,8 +1410,14 @@ func (j *Journal) initNextSeq() error {
 		}
 		// Read data blobs
 		datas := make([][]byte, nDesc)
+		oversize := false
 		for i := uint32(0); i < nDesc; i++ {
 			l := descs[i].ln
+			if uint64(l) > uint64(rem) {
+				oversize = true
+				break
+			}
+			rem -= int64(l)
 			buf := make([]byte, l)
 			if _, err := io.ReadFull(j.js, buf); err != nil {
 				// incomplete tx at EOF -> stop parsing
@@ -1392,6 +1427,9 @@ func (j *Journal) initNextSeq() error {
 				return err
 			}
 			datas[i] = buf
+		}
+		if oversize {
+			break
 		}
 		// Read commit record
 		var cm uint32

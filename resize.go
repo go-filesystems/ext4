@@ -53,6 +53,11 @@ func (fs *ext4FS) Grow(newSizeBytes int64) error {
 	if err := fs.f.Truncate(newSizeBytes); err != nil {
 		return fmt.Errorf("ext4: truncate backing file: %w", err)
 	}
+	// The device just grew: keep the size bound the readers derive from it in
+	// step, or a file legitimately using the new space would be refused.
+	if newSizeBytes > fs.partOffset {
+		atomic.StoreInt64(&fs.sb.deviceBytes, newSizeBytes-fs.partOffset)
+	}
 
 	// Publish the new block count up front so numBlockGroups() reflects the
 	// grown layout while we write descriptors and bitmaps for the new groups

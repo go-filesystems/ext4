@@ -135,8 +135,8 @@ func (fs *ext4FS) newFile(rw readerWriterAt, in *inode) (filesystem.File, error)
 	// keeps OpenFile and ReadFile agreeing about which inodes are readable.
 	// The ceiling must NOT be the bytes the extents supply: a sparse file's
 	// i_size legitimately exceeds them.
-	max := int64(fs.sb.BlocksCount) * int64(fs.sb.BlockSize)
-	if max <= 0 {
+	max, known := fs.sb.declaredBytes()
+	if !known {
 		// Filesystem size unknown (BlocksCount == 0 — only synthetic
 		// superblocks). Fall back to the highest logical byte the extents
 		// can address, as readFileData does.

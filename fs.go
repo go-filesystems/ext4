@@ -68,6 +68,9 @@ func openFromDevice(dev blockDevice, partIndex int) (filesystem.Filesystem, erro
 		dev.Close()
 		return nil, err
 	}
+	if devSize > off {
+		sb.deviceBytes = devSize - off
+	}
 	// Try to open a sidecar journal (best-effort). If a journal is present
 	// ReplayOnOpen will apply any committed transactions.
 	j, _ := OpenJournal(dev, off, int(sb.BlockSize), sb)
