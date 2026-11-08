@@ -1,7 +1,9 @@
 package filesystem_ext4
 
 import (
+	"bytes"
 	"compress/gzip"
+	_ "embed"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -19,10 +21,19 @@ import (
 // lays the filesystem down and debugfs `set_inode_field` writes every time
 // field below, so the expected values are the ones the oracle was told, not
 // ones this package computed. Regenerate with EXT4_REGEN_TIMES=1 (needs both).
+//
+// The images are embedded: the emulated lanes run the test binary away from
+// the source tree, where a relative testdata path does not exist.
 const (
 	times256Fixture = "testdata/times-ext4-i256.img.gz"
 	times128Fixture = "testdata/times-ext2-i128.img.gz"
 )
+
+//go:embed testdata/times-ext4-i256.img.gz
+var times256Gz []byte
+
+//go:embed testdata/times-ext2-i128.img.gz
+var times128Gz []byte
 
 // ext4 time fields: seconds (debugfs "@secs"), raw _extra word.
 type timesSpec struct {
@@ -191,14 +202,9 @@ func TestTimesRegenerateFixtures(t *testing.T) {
 	gzipTo(t, b, times128Fixture)
 }
 
-func openGz(t *testing.T, fixture string) filesystem.TimesReader {
+func openGz(t *testing.T, fixture []byte) filesystem.TimesReader {
 	t.Helper()
-	gz, err := os.Open(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gz.Close()
-	zr, err := gzip.NewReader(gz)
+	zr, err := gzip.NewReader(bytes.NewReader(fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,13 +271,13 @@ func checkSpecs(t *testing.T, tr filesystem.TimesReader, specs []timesSpec, want
 // oracle wrote for known values (256-byte inodes, extra-epoch dates, a
 // truncated extra area, a missing crtime).
 func TestTimesReferenceImages(t *testing.T) {
-	checkSpecs(t, openGz(t, times256Fixture), times256Specs, true)
+	checkSpecs(t, openGz(t, times256Gz), times256Specs, true)
 }
 
 // TestTimesReferenceImageSmallInodes: 128-byte inodes (ext2) have no _extra
 // words and no crtime.
 func TestTimesReferenceImageSmallInodes(t *testing.T) {
-	checkSpecs(t, openGz(t, times128Fixture), times128Specs, false)
+	checkSpecs(t, openGz(t, times128Gz), times128Specs, false)
 }
 
 // TestTimesLiveReferenceTools rebuilds both images with the tools on this host,
@@ -287,7 +293,7 @@ func TestTimesLiveReferenceTools(t *testing.T) {
 }
 
 func TestTimesRootSymlinkAndMissing(t *testing.T) {
-	tr := openGz(t, times256Fixture)
+	tr := openGz(t, times256Gz)
 	if ft, err := tr.Times("/"); err != nil || !ft.Mtime.Recorded() {
 		t.Fatalf("root: %+v %v", ft, err)
 	}
