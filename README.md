@@ -76,6 +76,7 @@ https://docs.kernel.org/filesystems/ext4/
 | Write at an offset | ✅ | `OpenFile(path)` → `io.WriterAt` + `Truncate` + `Sync` (`filesystem.WritableFile`), for extent-mapped inodes. Writes only the bytes given, allocates only the blocks the range touches, and **keeps the file sparse**: a write far past the end leaves the gap a hole. Inline-data and ext2/3 block-map inodes come back as a plain read-only `File`, so a caller falls back rather than failing |
 | Inline data | ✅ | Reads small files and directories stored inline in the inode/xattr area |
 | MkDir / Delete / Rename | ✅ | Directory and rename operations implemented |
+| Timestamps | ✅ | `filesystem.TimesReader`: atime/mtime/ctime at 1 ns (with the `_extra` epoch bits, through 2446) when the inode holds the extra word, else 1 s; `Btime` from `i_crtime` only on inodes large enough to hold it. Symlinks are not followed |
 | ReadLink / Symlinks | ✅ | Fast (in-inode) and slow (out-of-line) targets |
 | Metadata serialization (BGD/bitmaps/inode-table) | ✅ | Writes + `metadata_csum` supported |
 | Online resize (`Grow` / `Shrink` / `Resize`) | ✅ | `Grow` adds block groups; `Shrink` frees already-free trailing groups (non-relocating, resize2fs-style); `Resize` dispatches to whichever direction the new size requires. `Open`/`Format` return `filesystem.Filesystem`, so callers reach these by type-asserting to an interface exposing the method, e.g. `fs.(interface{ Resize(int64) error })` |
