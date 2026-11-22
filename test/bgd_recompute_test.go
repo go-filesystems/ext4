@@ -353,6 +353,7 @@ func TestBGDMetadataCsumRecomputed64(t *testing.T) {
 
 	sb.FeatureROCompat |= ext4.FeatROCompatMetadataCsum
 	sb.DescSize = 64
+	ext4.SetIgnoreChecksums(sb, true) // the image was built without checksums
 
 	var g uint32 = 0
 
