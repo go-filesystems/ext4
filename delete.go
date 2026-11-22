@@ -6,6 +6,8 @@ import (
 	"fmt"
 	iofs "io/fs"
 	"sync/atomic"
+
+	"github.com/go-volumes/safeio"
 )
 
 var removeDirChildDir func(readerWriterAt, int64, *superblock, string) error
@@ -14,7 +16,7 @@ var removeDirFreeBlocks = freeInodeBlocks
 var removeDirFreeSlot = freeInodeSlot
 
 func init() {
-	removeDirChildDir = removeDir
+	removeDirChildDir = removeDirTree
 }
 
 // DeleteFile removes the regular file at path from the ext4 filesystem.
@@ -184,9 +186,62 @@ func freeInodeSlot(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum ui
 	return writeSuperblock(f, fsOffset, sb)
 }
 
+// ext4TreeNode is a directory seen by checkDirTree, identified by inode.
+type ext4TreeNode struct {
+	ino uint32
+}
+
+// checkDirTree walks the directory tree under target WITHOUT recursion, before
+// removeDirTree changes anything, and refuses a hostile image whose directories
+// form a cycle (a directory entry of type directory naming an ancestor: a
+// directory hard link, which Link refuses to create but an image can contain),
+// a directory reachable twice, or a nesting deeper than safeio.MaxTreeDepth.
+// Without it removeDirTree recurses by path for ever while holding the fs lock.
+func checkDirTree(f readerWriterAt, fsOffset int64, sb *superblock, target *inode) error {
+	return safeio.PostOrder(ext4TreeNode{target.num},
+		func(n ext4TreeNode) (uint64, bool) { return uint64(n.ino), true },
+		func(n ext4TreeNode) ([]ext4TreeNode, error) {
+			in := target
+			if n.ino != target.num {
+				var err error
+				if in, err = readInode(f, fsOffset, sb, n.ino); err != nil {
+					return nil, err
+				}
+			}
+			ents, err := readDir(f, fsOffset, sb, in)
+			if err != nil {
+				return nil, err
+			}
+			kids := make([]ext4TreeNode, 0, len(ents))
+			for _, e := range ents {
+				if e.Name == "." || e.Name == ".." {
+					continue
+				}
+				if e.FileType == FtDir {
+					kids = append(kids, ext4TreeNode{e.Inode})
+				}
+			}
+			return kids, nil
+		},
+		func(ext4TreeNode) error { return nil }, 0)
+}
+
 // removeDir removes the directory at path and all its contents recursively.
-// Returns nil if the path does not exist (idempotent).
+// Returns nil if the path does not exist (idempotent). The tree is checked
+// first, so a cyclic image is refused with nothing changed.
 func removeDir(f readerWriterAt, fsOffset int64, sb *superblock, path string) error {
+	target, err := lookupPath(f, fsOffset, sb, path)
+	if err == nil && target.isDir() {
+		if err := checkDirTree(f, fsOffset, sb, target); err != nil {
+			return fmt.Errorf("ext4: DeleteDir %q: %w", path, err)
+		}
+	}
+	return removeDirTree(f, fsOffset, sb, path)
+}
+
+// removeDirTree is the recursive deletion; its recursion is bounded by
+// checkDirTree, which removeDir runs first.
+func removeDirTree(f readerWriterAt, fsOffset int64, sb *superblock, path string) error {
 	// Same shape as removeFile above, and the same correction: only a path
 	// that is not there is the documented idempotent case.
 	parentIno, name, err := lookupParent(f, fsOffset, sb, path)
