@@ -3,6 +3,16 @@ Changelog
 
 Recent local changes:
 
+- metadata_csum verification (MINOR, behaviour change): superblock, group
+  descriptor, inode, directory/htree and bitmap checksums are now verified
+  on read and a mismatch returns `*ChecksumError` (`ErrChecksum`). Images
+  with a stale checksum that opened before are now refused; use
+  `Options.IgnoreChecksums` to read them. Writers now stamp the group
+  descriptor checksum after every allocator counter update and the inode
+  checksum of new directories, and the directory-block tail is kept
+  consistent so a re-written block verifies. Extent block checksums remain
+  unverified (follow-up).
+
 - Restore test-only fallback counter (`recordBlockingFallback`) guarded
   by `//go:build test` so diagnostics compile into test builds.
 - Shorten journal critical sections in `Transaction.Commit()` by reserving

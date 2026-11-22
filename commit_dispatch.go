@@ -612,16 +612,7 @@ func (w *commitWorker) run() {
 						}
 						if changed {
 							d.encode(t.sb)
-							if t.sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
-								le := binary.LittleEndian
-								raw := d.raw
-								le.PutUint16(raw[30:], 0)
-								gLE := make([]byte, 4)
-								le.PutUint32(gLE, uint32(t.group))
-								csum := crc32c(t.sb.csumSeed(), gLE)
-								csum = crc32c(csum, raw[:t.sb.DescSize])
-								le.PutUint16(raw[30:], uint16(csum))
-							}
+							stampBGDCsum(t.sb, uint32(t.group), d.raw)
 
 							// Focused forensic snapshot: when a BGD write occurs for a
 							// sequence of interest (set via EXT4_FOCUS_SEQ), capture the

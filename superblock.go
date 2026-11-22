@@ -39,11 +39,19 @@ type superblock struct {
 	// the partition start, when known (0 = unknown). Neither is on disk.
 	maxRead     int64
 	deviceBytes int64
+	// ignoreCsum is Options.IgnoreChecksums (forensic opt-out); not on disk.
+	ignoreCsum bool
 }
 
 // readSuperblock reads and decodes the ext4 superblock. The superblock always
 // resides at byte offset 1024 within the filesystem (regardless of block size).
 func readSuperblock(f readerWriterAt, fsOffset int64) (*superblock, error) {
+	return readSuperblockOpts(f, fsOffset, Options{})
+}
+
+// readSuperblockOpts is readSuperblock with Options; with metadata_csum set and
+// IgnoreChecksums false it refuses a superblock whose s_checksum is wrong.
+func readSuperblockOpts(f readerWriterAt, fsOffset int64, opts Options) (*superblock, error) {
 	raw := make([]byte, superblockSize)
 	if _, err := f.ReadAt(raw, fsOffset+1024); err != nil {
 		return nil, fmt.Errorf("ext4: read superblock: %w", err)
@@ -117,7 +125,11 @@ func readSuperblock(f readerWriterAt, fsOffset int64) (*superblock, error) {
 	sb.LogGroupsPerFlex = raw[0x174]
 	sb.ChecksumType = raw[0x175]
 	sb.ChecksumSeed = le.Uint32(raw[0x270:])
+	sb.ignoreCsum = opts.IgnoreChecksums
 
+	if err := verifySuperblockCsum(sb); err != nil {
+		return nil, err
+	}
 	return sb, nil
 }
 

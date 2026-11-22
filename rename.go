@@ -159,6 +159,9 @@ func updateDotDot(f readerWriterAt, fsOffset int64, sb *superblock, dirIno *inod
 			if err != nil {
 				return err
 			}
+			if err := verifyDirBlockCsum(sb, dirIno.num, dirIno.generation(), physBlock, buf); err != nil {
+				return err
+			}
 			modified := false
 			off := 0
 			for off+8 <= len(buf) {

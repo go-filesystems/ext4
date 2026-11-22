@@ -36,7 +36,7 @@ func det(b []byte, seed uint32) {
 // fixtureDir extracts the embedded corpus into a fresh temp directory and
 // returns the directory path. Each image is a plain file named e.g.
 // "ext4_4k.img".
-func fixtureDir(t *testing.T) string {
+func fixtureDir(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	gz, err := gzip.NewReader(bytes.NewReader(fixturesTarGz))

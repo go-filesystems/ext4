@@ -146,6 +146,18 @@ func readBitmap(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock ui
 	if sb != nil && sb.BlocksPerGroup != 0 {
 		g, isBlock, ok := bitmapOwnerGroup(f, fsOffset, sb, bitmapBlock)
 		reservedDesc := ""
+		if ok && sb.csumEnforced() {
+			// Verify the bytes as stored, before in-memory reservations are
+			// merged in, so a tampered bitmap is refused rather than
+			// re-stamped with a valid checksum by the next allocation.
+			d, derr := readBGD(f, fsOffset, sb, g)
+			if derr != nil {
+				return nil, derr
+			}
+			if cerr := verifyBitmapCsum(sb, g, d, isBlock, bmap); cerr != nil {
+				return nil, cerr
+			}
+		}
 		if ok {
 			// Merge reserved bits (if any)
 			key := bitmapLockKey(f, g, isBlock)
@@ -257,16 +269,7 @@ func writeBitmapBufNoLock(f readerWriterAt, fsOffset int64, sb *superblock, g ui
 // checksum (bg_checksum) over the descriptor bytes in d.raw. No-op when
 // metadata_csum is disabled.
 func setBGDChecksum(sb *superblock, g uint32, d *bgd) {
-	if sb.FeatureROCompat&FeatROCompatMetadataCsum == 0 {
-		return
-	}
-	le := binary.LittleEndian
-	le.PutUint16(d.raw[30:], 0)
-	gLE := make([]byte, 4)
-	le.PutUint32(gLE, g)
-	csum := crc32c(sb.csumSeed(), gLE)
-	csum = crc32c(csum, d.raw[:sb.DescSize])
-	le.PutUint16(d.raw[30:], uint16(csum))
+	stampBGDCsum(sb, g, d.raw)
 }
 
 // stageDescriptorUpdate stages group g's descriptor into tx so that several
@@ -472,6 +475,7 @@ func allocInode(f readerWriterAt, fsOffset int64, sb *superblock, isDir bool) (u
 			// that could race with higher-level grouped operations.
 			setBitmapCsum(sb, g, d, false, bmap)
 			d.encode(sb)
+			stampBGDCsum(sb, g, d.raw)
 
 			atomic.AddUint32(&sb.FreeInodesCount, ^uint32(0))
 			bs := int64(sb.BlockSize)
@@ -534,6 +538,7 @@ func allocInode(f readerWriterAt, fsOffset int64, sb *superblock, isDir bool) (u
 			// commit dispatcher so we don't hold metadata locks during IO.
 			setBitmapCsum(sb, g, d, false, bmap)
 			d.encode(sb)
+			stampBGDCsum(sb, g, d.raw)
 			// Update in-memory superblock counters before encoding the raw
 			// bytes so the superblock written to disk reflects the new state.
 			atomic.AddUint32(&sb.FreeInodesCount, ^uint32(0))
@@ -723,6 +728,7 @@ func allocInodeWithTx(f readerWriterAt, fsOffset int64, sb *superblock, isDir bo
 		// bitmap and BGD locks, then release locks before returning.
 		setBitmapCsum(sb, g, d, false, bmap)
 		d.encode(sb)
+		stampBGDCsum(sb, g, d.raw)
 
 		atomic.AddUint32(&sb.FreeInodesCount, ^uint32(0))
 		bs := int64(sb.BlockSize)
@@ -990,6 +996,7 @@ func allocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint32) ([]
 			// writes instead.
 			setBitmapCsum(sb, g, d, true, bmap)
 			d.encode(sb)
+			stampBGDCsum(sb, g, d.raw)
 
 			atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 			if ext4LockDebug {
@@ -1050,6 +1057,7 @@ func allocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint32) ([]
 			// locks during IO.
 			setBitmapCsum(sb, g, d, true, bmap)
 			d.encode(sb)
+			stampBGDCsum(sb, g, d.raw)
 			// Update in-memory superblock counters before encoding.
 			atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 			if ext4LockDebug {
@@ -1133,10 +1141,9 @@ func allocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint32) ([]
 			}
 			d2, derr := readBGD(f, fsOffset, sb, g2)
 			if derr != nil {
+				// The BGD lock was already released after the commit above;
+				// unlocking it again would block forever.
 				unreserveBitmapBits(f, fsOffset, sb, g, true, reserveList)
-				if unlockBGD != nil {
-					unlockBGD()
-				}
 				return nil, derr
 			}
 			// Determine inode table size (in blocks) for this group and
@@ -1150,9 +1157,6 @@ func allocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint32) ([]
 				// Unexpected allocation into inode table — fail safely.
 				// Caller will handle retry/error path.
 				unreserveBitmapBits(f, fsOffset, sb, g, true, reserveList)
-				if unlockBGD != nil {
-					unlockBGD()
-				}
 				return nil, fmt.Errorf("ext4: allocation would allocate block %d inside inode-table group=%d", blk, g2)
 			}
 		}
@@ -1313,6 +1317,7 @@ func lockedAllocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 		d.FreeBlocksCount -= n
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
+		stampBGDCsum(sb, g, d.raw)
 		atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 
 		bmapCopy := make([]byte, len(bmap))
@@ -1511,6 +1516,7 @@ func allocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 		if tx != nil {
 			setBitmapCsum(sb, g, d, true, bmap)
 			d.encode(sb)
+			stampBGDCsum(sb, g, d.raw)
 			atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 			bs := int64(sb.BlockSize)
 			sbBlock := uint64(1024 / bs)
@@ -1595,15 +1601,7 @@ func allocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 			// ordering consistent without issuing an independent tx.
 			setBitmapCsum(sb, g, d, true, bmap)
 			d.encode(sb)
-			if sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
-				le := binary.LittleEndian
-				le.PutUint16(d.raw[30:], 0)
-				gLE := make([]byte, 4)
-				le.PutUint32(gLE, g)
-				csum := crc32c(sb.csumSeed(), gLE)
-				csum = crc32c(csum, d.raw[:sb.DescSize])
-				le.PutUint16(d.raw[30:], uint16(csum))
-			}
+			stampBGDCsum(sb, g, d.raw)
 
 			atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 			bmapCopy := make([]byte, len(bmap))
@@ -1670,6 +1668,7 @@ func allocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 		// locks during IO.
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
+		stampBGDCsum(sb, g, d.raw)
 		atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 		bmapCopy := make([]byte, len(bmap))
 		copy(bmapCopy, bmap)
@@ -1857,6 +1856,7 @@ func lockedAllocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n
 		d.FreeBlocksCount -= n
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
+		stampBGDCsum(sb, g, d.raw)
 		atomic.AddUint64(&sb.FreeBlocksCount, ^(uint64(n) - 1))
 
 		// Prepare ranges into tx while still holding locks to avoid races
@@ -1970,15 +1970,7 @@ func freeBlock(f readerWriterAt, fsOffset int64, sb *superblock, physBlock uint6
 	if j := journalForAny(f); j != nil && j.enabled {
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
-		if sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
-			le := binary.LittleEndian
-			le.PutUint16(d.raw[30:], 0)
-			gLE := make([]byte, 4)
-			le.PutUint32(gLE, g)
-			csum := crc32c(sb.csumSeed(), gLE)
-			csum = crc32c(csum, d.raw[:sb.DescSize])
-			le.PutUint16(d.raw[30:], uint16(csum))
-		}
+		stampBGDCsum(sb, g, d.raw)
 
 		atomic.AddUint64(&sb.FreeBlocksCount, 1)
 		if ext4LockDebug {
@@ -2046,15 +2038,7 @@ func freeBlock(f readerWriterAt, fsOffset int64, sb *superblock, physBlock uint6
 	// finally write the descriptor and superblock.
 	setBitmapCsum(sb, g, d, true, bmap)
 	d.encode(sb)
-	if sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
-		le := binary.LittleEndian
-		le.PutUint16(d.raw[30:], 0)
-		gLE := make([]byte, 4)
-		le.PutUint32(gLE, g)
-		csum := crc32c(sb.csumSeed(), gLE)
-		csum = crc32c(csum, d.raw[:sb.DescSize])
-		le.PutUint16(d.raw[30:], uint16(csum))
-	}
+	stampBGDCsum(sb, g, d.raw)
 	rawCopy := make([]byte, len(d.raw))
 	copy(rawCopy, d.raw)
 

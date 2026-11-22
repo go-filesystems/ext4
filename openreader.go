@@ -31,13 +31,18 @@ import (
 // That is the same division as iso9660, squashfs, hfsplus and ufs, whose
 // reader-based constructors have always worked this way.
 func OpenReader(r io.ReaderAt, size int64) (filesystem.Filesystem, error) {
+	return OpenReaderWithOptions(r, size, Options{})
+}
+
+// OpenReaderWithOptions is OpenReader with Options.
+func OpenReaderWithOptions(r io.ReaderAt, size int64, opts Options) (filesystem.Filesystem, error) {
 	if r == nil {
 		return nil, errors.New("ext4: OpenReader needs a reader")
 	}
 	if size <= 0 {
 		return nil, fmt.Errorf("ext4: an image of %d bytes is not one", size)
 	}
-	return openFromDevice(&readerDevice{r: r, size: size}, -1)
+	return openFromDevice(&readerDevice{r: r, size: size}, -1, opts)
 }
 
 // ErrReadOnlyReader is what a write gets when the filesystem was opened over
