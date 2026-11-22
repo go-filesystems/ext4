@@ -144,16 +144,12 @@ func readBitmap(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock ui
 	// don't select bits that another goroutine has reserved but not yet
 	// persisted. We derive the group from the bitmap block number.
 	if sb != nil && sb.BlocksPerGroup != 0 {
-		g, isBlock, ok := bitmapOwnerGroup(f, fsOffset, sb, bitmapBlock)
+		g, isBlock, d, ok := bitmapOwnerGroup(f, fsOffset, sb, bitmapBlock)
 		reservedDesc := ""
 		if ok && sb.csumEnforced() {
 			// Verify the bytes as stored, before in-memory reservations are
 			// merged in, so a tampered bitmap is refused rather than
 			// re-stamped with a valid checksum by the next allocation.
-			d, derr := readBGD(f, fsOffset, sb, g)
-			if derr != nil {
-				return nil, derr
-			}
 			if cerr := verifyBitmapCsum(sb, g, d, isBlock, bmap); cerr != nil {
 				return nil, cerr
 			}
@@ -212,9 +208,12 @@ func readBitmap(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock ui
 	return bmap, nil
 }
 
-func bitmapOwnerGroup(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock uint64) (uint32, bool, bool) {
+// bitmapOwnerGroup finds the group whose descriptor d names bitmapBlock, and
+// whether it is that group's block bitmap. Groups whose descriptor cannot be
+// read are skipped.
+func bitmapOwnerGroup(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock uint64) (g uint32, isBlock bool, d *bgd, ok bool) {
 	if sb == nil {
-		return 0, false, false
+		return 0, false, nil, false
 	}
 	for g := uint32(0); g < sb.numBlockGroups(); g++ {
 		d, err := readBGD(f, fsOffset, sb, g)
@@ -222,13 +221,13 @@ func bitmapOwnerGroup(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBl
 			continue
 		}
 		if d.BlockBitmapBlock == bitmapBlock {
-			return g, true, true
+			return g, true, d, true
 		}
 		if d.InodeBitmapBlock == bitmapBlock {
-			return g, false, true
+			return g, false, d, true
 		}
 	}
-	return 0, false, false
+	return 0, false, nil, false
 }
 
 // writeBitmapWithCsum writes a block or inode bitmap back, computing the
