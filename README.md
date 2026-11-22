@@ -98,6 +98,7 @@ sizes from a value read off the image is checked against what the image can hold
 | extent leaves | overlapping leaves (logical or physical) are refused: each would make a reader decode the same blocks again, so a few KiB of leaves could cost gigabytes |
 | sidecar journal | descriptor count and each data length are checked against the bytes the journal file still holds before any buffer is sized from them |
 | extent tree | depth ≤ 5, strictly decreasing, no block visited twice |
+| `DeleteDir` tree | walked first without recursion (`safeio.PostOrder`, keyed on inode); a directory cycle, a directory reachable twice or nesting deeper than `safeio.MaxTreeDepth` is refused with `safeio.ErrCycle` / `ErrTooDeep` before anything is freed |
 
 Fuzz targets: `FuzzBlockMapExtents`, `FuzzExtentList`, `FuzzJournalSidecar` (these
 assert the allocation stays proportional to the input), plus the older
