@@ -82,6 +82,12 @@ func readInode(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum uint32
 		}
 		unlockInode()
 
+		// metadata_csum: refuse a tampered inode instead of serving it, and
+		// instead of letting writeInode re-stamp a valid checksum over it.
+		if err := verifyInodeCsum(sb, inodeNum, raw); err != nil {
+			return nil, err
+		}
+
 		le := binary.LittleEndian
 		in := &inode{raw: raw, num: inodeNum}
 		in.mode = le.Uint16(raw[inodeOffMode:])
@@ -560,30 +566,11 @@ func (in *inode) setInlineExtents(exts []extentLeaf) error {
 func computeInodeCsum(sb *superblock, in *inode) {
 	le := binary.LittleEndian
 	raw := in.raw
-
-	// Zero checksum fields.
-	origLo := le.Uint16(raw[inodeOffCsumLo:])
-	le.PutUint16(raw[inodeOffCsumLo:], 0)
-	var origHi uint16
-	if len(raw) > inodeOffCsumHi+2 {
-		origHi = le.Uint16(raw[inodeOffCsumHi:])
-		le.PutUint16(raw[inodeOffCsumHi:], 0)
-	}
-
-	numBuf := make([]byte, 4)
-	le.PutUint32(numBuf, in.num)
-	genBuf := make([]byte, 4)
-	le.PutUint32(genBuf, in.generation())
-
-	seed := sb.csumSeed()
-	csum := crc32c(seed, numBuf)
-	csum = crc32c(csum, genBuf)
-	csum = crc32c(csum, raw)
-
+	// inodeCsum follows the kernel (ext4_inode_csum): the checksum fields count
+	// as zero, and the high half exists only when i_extra_isize >= 4.
+	csum, hi := inodeCsum(sb, in.num, raw)
 	le.PutUint16(raw[inodeOffCsumLo:], uint16(csum&0xFFFF))
-	if len(raw) > inodeOffCsumHi+2 {
+	if hi {
 		le.PutUint16(raw[inodeOffCsumHi:], uint16(csum>>16))
 	}
-	_ = origLo
-	_ = origHi
 }

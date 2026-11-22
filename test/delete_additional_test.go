@@ -100,6 +100,7 @@ func TestWriteBitmapWithCsumAndFreeBlock(t *testing.T) {
 	sb.FeatureROCompat = ext4.FeatROCompatMetadataCsum
 	sb.FeatureIncompat = ext4.FeatIncompat64bit
 	sb.BlocksCount = uint64(128)
+	ext4.SetIgnoreChecksums(sb, true) // the descriptor is hand-built, unstamped
 
 	// Create bgd raw with block bitmap at block 3.
 	dRaw := make([]byte, sb.DescSize)

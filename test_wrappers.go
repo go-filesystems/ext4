@@ -401,6 +401,11 @@ func IsSymlink(in *Inode) bool                     { return in.isSymlink() }
 // computeInodeCsum wrapper
 func ComputeInodeCsum(sb *Superblock, in *Inode) { computeInodeCsum(sb, in) }
 
+// SetIgnoreChecksums sets the forensic opt-out on a hand-built superblock.
+// Tests that flip a checksum feature on an image that never carried
+// checksums use it, because that image's structures are unstamped.
+func SetIgnoreChecksums(sb *Superblock, v bool) { sb.ignoreCsum = v }
+
 // SetInlineExtents sets inline extents on an inode (wrapped method).
 func SetInlineExtents(in *Inode, exts []ExtentLeaf) error {
 	il := make([]extentLeaf, len(exts))

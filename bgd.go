@@ -28,6 +28,9 @@ func readBGD(f readerWriterAt, fsOffset int64, sb *superblock, g uint32) (*bgd, 
 	if _, err := f.ReadAt(raw, fsOffset+descOff); err != nil {
 		return nil, fmt.Errorf("ext4: read BGD %d: %w", g, err)
 	}
+	if err := verifyBGDCsum(sb, g, raw); err != nil {
+		return nil, err
+	}
 	d := decodeBGD(raw, sb)
 	if ext4LockDebug {
 		_, file, line, _ := runtime.Caller(1)
@@ -90,17 +93,7 @@ func (d *bgd) encode(sb *superblock) {
 func writeBGD(f readerWriterAt, fsOffset int64, sb *superblock, g uint32, d *bgd) error {
 	d.encode(sb)
 
-	if sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
-		le := binary.LittleEndian
-		raw := d.raw
-		// Zero the checksum field before computing.
-		le.PutUint16(raw[30:], 0)
-		gLE := make([]byte, 4)
-		le.PutUint32(gLE, g)
-		csum := crc32c(sb.csumSeed(), gLE)
-		csum = crc32c(csum, raw[:sb.DescSize])
-		le.PutUint16(raw[30:], uint16(csum))
-	}
+	stampBGDCsum(sb, g, d.raw)
 
 	// Serialize preparation of the descriptor update so concurrent
 	// writers don't compute overlapping descriptor bytes. Take the per-

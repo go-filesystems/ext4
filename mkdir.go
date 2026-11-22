@@ -213,6 +213,9 @@ func makeDir(f readerWriterAt, fsOffset int64, sb *superblock, path string, perm
 			return err
 		}
 		// Add inode to tx
+		if sb.FeatureROCompat&FeatROCompatMetadataCsum != 0 {
+			computeInodeCsum(sb, newIno)
+		}
 		writeBuf := make([]byte, len(newIno.raw))
 		copy(writeBuf, newIno.raw)
 		off, err := inodeDiskOffset(f, fsOffset, sb, newInoNum)

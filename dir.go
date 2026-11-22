@@ -103,6 +103,9 @@ func readDir(f readerWriterAt, fsOffset int64, sb *superblock, dirInode *inode) 
 			if err != nil {
 				return nil, fmt.Errorf("ext4: read dir block: %w", err)
 			}
+			if err := verifyDirBlockCsum(sb, dirInode.num, dirInode.generation(), e.PhysBlock+blk, buf); err != nil {
+				return nil, err
+			}
 			entries = append(entries, parseDirBlock(buf)...)
 		}
 	}
@@ -280,6 +283,9 @@ func addDirEntryWithTx(tx *Transaction, f readerWriterAt, fsOffset int64, sb *su
 			physBlock := e.PhysBlock + blk
 			buf, err := readRawBlock(f, fsOffset, sb, physBlock)
 			if err != nil {
+				return nil, err
+			}
+			if err := verifyDirBlockCsum(sb, dirIno.num, dirIno.generation(), physBlock, buf); err != nil {
 				return nil, err
 			}
 			if tryInsertDirEntry(buf, childIno, name, fileType, needed) {
@@ -654,6 +660,10 @@ func updateDirBlockCsum(buf []byte, sb *superblock, dirIno *inode) {
 	seed := sb.csumSeed()
 	csum := crc32c(seed, numBuf)
 	csum = crc32c(csum, genBuf)
-	csum = crc32c(csum, buf[:tailOff+8])
+	// The checksum covers the block up to the START of the tail dirent
+	// (ext4_dirent_csum: size = (char *)t - (char *)dirent), not through the
+	// tail's own header. Earlier versions summed buf[:tailOff+8], which no
+	// kernel or e2fsprogs accepts.
+	csum = crc32c(csum, buf[:tailOff])
 	le.PutUint32(buf[tailOff+8:], csum)
 }

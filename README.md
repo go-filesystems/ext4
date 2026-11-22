@@ -38,6 +38,16 @@ block sizes (see `testdata/`).
 - Metadata serialization for block-group descriptors (BGD), block and inode
   bitmaps and inode-table writes is implemented; `metadata_csum` support is
   available for checksum-protected metadata.
+- **Checksums are verified on read.** With `metadata_csum` (or `gdt_csum`
+  for descriptors) the superblock, group descriptors, inodes, directory and
+  htree blocks, and the block and inode bitmaps are checked against their
+  stored CRC (kernel docs, "Checksums": docs.kernel.org/filesystems/ext4/checksums.html).
+  A mismatch returns a `*ChecksumError` (`errors.As`, or `errors.Is(err,
+  ErrChecksum)`), never a panic, and a write refuses a tampered bitmap instead
+  of re-stamping it. For forensic reads of a damaged image pass
+  `Options.IgnoreChecksums` (off by default) to `OpenWithOptions`. Extent
+  tree block checksums are not yet verified (the writer does not stamp them
+  yet); this is tracked as a follow-up.
 - Online resize: `Grow()` implements expanding images and adding block groups.
 - IOCTLs: basic `GetFlags`/`SetFlags` ioctl paths are implemented where useful
   for tooling.

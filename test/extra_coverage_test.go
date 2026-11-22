@@ -80,6 +80,7 @@ func TestWriteBitmapAndBGDMetadataCsum(t *testing.T) {
 	sb := ext4.CloneSuperblockFromFS(fs)
 	sb.FeatureROCompat |= ext4.FeatROCompatMetadataCsum
 	sb.DescSize = 64
+	ext4.SetIgnoreChecksums(sb, true) // the image was built without checksums
 
 	oldD, err := ext4.ReadBGD(rw, 0, sb, 0)
 	if err != nil {
@@ -449,6 +450,7 @@ func TestWriteInodeWithCsum(t *testing.T) {
 	rw := ext4.CloneFSImage(t, fs)
 	sb := ext4.CloneSuperblockFromFS(fs)
 	sb.FeatureROCompat |= ext4.FeatROCompatMetadataCsum
+	ext4.SetIgnoreChecksums(sb, true) // the image was built without checksums
 	if err := ext4.WriteSuperblock(rw, 0, sb); err != nil {
 		t.Fatalf("writeSuperblock: %v", err)
 	}
@@ -921,6 +923,7 @@ func TestFreeInodeSlotWithDesc64(t *testing.T) {
 	sb := ext4.CloneSuperblockFromFS(fs)
 	sb.FeatureROCompat |= ext4.FeatROCompatMetadataCsum
 	sb.DescSize = 64
+	ext4.SetIgnoreChecksums(sb, true) // the image was built without checksums
 
 	ino, err := ext4.AllocInode(rw, 0, sb, false)
 	if err != nil {

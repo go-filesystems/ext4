@@ -40,20 +40,30 @@ var _ filesystem.Filesystem = (*ext4FS)(nil)
 // the partition table (MBR / GPT) and using the first Linux partition.
 // Pass partIndex = -1 for auto-detection (first Linux partition).
 func Open(imagePath string, partIndex int) (filesystem.Filesystem, error) {
+	return OpenWithOptions(imagePath, partIndex, Options{})
+}
+
+// OpenWithOptions is Open with Options (see Options.IgnoreChecksums).
+func OpenWithOptions(imagePath string, partIndex int, opts Options) (filesystem.Filesystem, error) {
 	raw, err := os.OpenFile(imagePath, os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("ext4: open %s: %w", imagePath, err)
 	}
-	return openFromDevice(&osFileDevice{f: raw}, partIndex)
+	return openFromDevice(&osFileDevice{f: raw}, partIndex, opts)
 }
 
 // OpenFromDevice opens an ext4 filesystem backed by an arbitrary block device.
 // dev must remain valid until the returned Filesystem is closed.
 func OpenFromDevice(dev blockDevice, partIndex int) (filesystem.Filesystem, error) {
-	return openFromDevice(dev, partIndex)
+	return openFromDevice(dev, partIndex, Options{})
 }
 
-func openFromDevice(dev blockDevice, partIndex int) (filesystem.Filesystem, error) {
+// OpenFromDeviceWithOptions is OpenFromDevice with Options.
+func OpenFromDeviceWithOptions(dev blockDevice, partIndex int, opts Options) (filesystem.Filesystem, error) {
+	return openFromDevice(dev, partIndex, opts)
+}
+
+func openFromDevice(dev blockDevice, partIndex int, opts Options) (filesystem.Filesystem, error) {
 	// Device size lets the shared go-volumes/gpt parser bound the partition
 	// table against the backing device (M2). Size() failing is non-fatal: pass
 	// 0 so partitionOffset falls back to its internal overflow-safe ceiling.
@@ -63,7 +73,7 @@ func openFromDevice(dev blockDevice, partIndex int) (filesystem.Filesystem, erro
 		dev.Close()
 		return nil, err
 	}
-	sb, err := readSuperblock(dev, off)
+	sb, err := readSuperblockOpts(dev, off, opts)
 	if err != nil {
 		dev.Close()
 		return nil, err

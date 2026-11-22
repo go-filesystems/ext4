@@ -61,6 +61,7 @@ func TestMakeDirRemainingErrorPaths(t *testing.T) {
 		defer cleanup()
 		sb := ext4.CloneSuperblockFromFS(fs)
 		sb.FeatureROCompat |= ext4.FeatROCompatMetadataCsum
+		ext4.SetIgnoreChecksums(sb, true) // the image was built without checksums
 		rw := ext4.CloneFSImage(t, fs)
 		if err := ext4.MakeDir(rw, 0, sb, "/foo", 0o755); err != nil {
 			t.Fatalf("makeDir: %v", err)

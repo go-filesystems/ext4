@@ -77,6 +77,9 @@ func zeroDirEntry(f readerWriterAt, fsOffset int64, sb *superblock, dirIno *inod
 			if err != nil {
 				return err
 			}
+			if err := verifyDirBlockCsum(sb, dirIno.num, dirIno.generation(), physBlock, buf); err != nil {
+				return err
+			}
 			if zeroEntryInBlock(buf, name, le) {
 				// Trace the directory zeroing (deletion) for debugging.
 				traceDirOp("zero", dirIno.num, 0, name)
