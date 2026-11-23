@@ -3,6 +3,17 @@ Changelog
 
 Recent local changes:
 
+- Extent block checksums (MINOR, behaviour change, fixes #46): the writer
+  now stamps the `ext4_extent_tail` checksum on every extent block it
+  creates (file growth, truncation, rewrite, directory growth), and the reader
+  verifies it, returning `*ChecksumError` with `Kind` `"extent block"`;
+  `Options.IgnoreChecksums` turns it off. An image with a tampered extent
+  block, or one written by an earlier version of this package on a
+  `metadata_csum` filesystem (extent blocks unstamped), is now refused; read
+  it with `IgnoreChecksums` and rewrite the affected files. Inode checksums
+  were audited on the write, symlink and link paths: all go through
+  `writeInode`/`addInodeToTx`, which stamp them.
+
 - metadata_csum verification (MINOR, behaviour change): superblock, group
   descriptor, inode, directory/htree and bitmap checksums are now verified
   on read and a mismatch returns `*ChecksumError` (`ErrChecksum`). Images

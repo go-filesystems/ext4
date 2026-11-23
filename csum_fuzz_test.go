@@ -17,6 +17,10 @@ func FuzzChecksumVerify(f *testing.F) {
 	f.Add(make([]byte, 128), uint32(11), uint8(3))
 	f.Add(make([]byte, 256), uint32(2), uint8(0))
 	f.Add(make([]byte, 4096), uint32(2), uint8(1))
+	// An extent block: magic, eh_max 340 (tail at 4092), and one whose eh_max
+	// points the tail past the end of the block.
+	f.Add(append([]byte{0x0A, 0xF3, 0, 0, 0x54, 0x01}, make([]byte, 4090)...), uint32(12), uint8(1))
+	f.Add(append([]byte{0x0A, 0xF3, 0, 0, 0xFF, 0xFF}, make([]byte, 4090)...), uint32(12), uint8(1))
 	f.Fuzz(func(t *testing.T, buf []byte, num uint32, shape uint8) {
 		sb := &superblock{
 			FeatureROCompat: FeatROCompatMetadataCsum,
@@ -28,6 +32,7 @@ func FuzzChecksumVerify(f *testing.F) {
 		}
 		for _, err := range []error{
 			verifyDirBlockCsum(sb, num, num^0x5a5a, uint64(num), buf),
+			verifyExtentBlockCsum(sb, num, num^0x5a5a, uint64(num), buf),
 			verifyInodeCsum(sb, num, buf),
 			verifyBGDCsum(sb, num%64, buf),
 			verifyBitmapCsum(sb, num%64, &bgd{raw: make([]byte, 64)}, shape&2 == 0, buf),

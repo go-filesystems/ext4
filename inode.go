@@ -344,6 +344,15 @@ func parseExtentNode(f readerWriterAt, fsOffset int64, sb *superblock, buf []byt
 			if err != nil {
 				return nil, fmt.Errorf("ext4: read extent index block %d: %w", childBlock, err)
 			}
+			// metadata_csum: the block's et_checksum covers the inode's number
+			// and generation, so a block moved between inodes is refused too.
+			var gen uint32
+			if len(inodeRaw) >= inodeOffGeneration+4 {
+				gen = le.Uint32(inodeRaw[inodeOffGeneration:])
+			}
+			if err := verifyExtentBlockCsum(sb, inodeNum, gen, childBlock, childBuf); err != nil {
+				return nil, err
+			}
 			// C1: children must declare exactly depth-1 (strictly decreasing).
 			sub, err := parseExtentNode(f, fsOffset, sb, childBuf, inodeNum, inodeRaw, depth-1, visited)
 			if err != nil {

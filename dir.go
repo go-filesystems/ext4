@@ -474,7 +474,7 @@ func addDirEntryWithTx(tx *Transaction, f readerWriterAt, fsOffset int64, sb *su
 	// Need an indirect extent: allocate+write child block outside lock.
 	var childBlock uint64
 	var childCleanup func()
-	childBlock, childCleanup, err = prepareExtentChild(f, fsOffset, sb, exts, tx)
+	childBlock, childCleanup, err = prepareExtentChild(f, fsOffset, sb, dirIno, exts, tx)
 	if err != nil {
 		if tx != nil && createdLocalTx {
 			_ = tx.Abort()
