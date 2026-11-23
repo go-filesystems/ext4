@@ -396,3 +396,52 @@ func TestPrepareExtentChildStamps(t *testing.T) {
 	}
 	wantChecksumError(t, verifyExtentBlockCsum(sb, 77, 0xABCE, child, buf), "extent block")
 }
+
+// The guards of the extent-block checksum helpers, each asserted on both sides.
+func TestExtentBlockCsumGuards(t *testing.T) {
+	csb := &superblock{FeatureROCompat: FeatROCompatMetadataCsum, BlockSize: 4096}
+	plain := &superblock{BlockSize: 4096}
+
+	// A buffer too short to hold a header: not ok, and no panic.
+	for _, n := range []int{0, 3, 11} {
+		if _, _, ok := extentBlockCsum(csb, 1, 0, make([]byte, n)); ok {
+			t.Fatalf("len %d: want ok=false", n)
+		}
+	}
+	// A 12-byte header with eh_max 0 has its tail at 12: needs 16 bytes.
+	if _, _, ok := extentBlockCsum(csb, 1, 0, make([]byte, 15)); ok {
+		t.Fatal("len 15: tail+4 > len must be refused")
+	}
+	if _, tail, ok := extentBlockCsum(csb, 1, 0, make([]byte, 16)); !ok || tail != 12 {
+		t.Fatalf("len 16: ok=%v tail=%d, want ok tail 12", ok, tail)
+	}
+
+	// Stamp: a no-op without metadata_csum, and tolerant of a nil superblock.
+	buf := make([]byte, 4096)
+	binary.LittleEndian.PutUint16(buf[4:], 340)
+	stampExtentBlockCsum(nil, 5, 7, buf)
+	stampExtentBlockCsum(plain, 5, 7, buf)
+	if binary.LittleEndian.Uint32(buf[12+340*12:]) != 0 {
+		t.Fatal("stamp wrote a checksum without metadata_csum")
+	}
+	stampExtentBlockCsum(csb, 5, 7, buf)
+	if binary.LittleEndian.Uint32(buf[12+340*12:]) == 0 {
+		t.Fatal("stamp wrote nothing under metadata_csum")
+	}
+	if err := verifyExtentBlockCsum(csb, 5, 7, 99, buf); err != nil {
+		t.Fatalf("stamped block refused: %v", err)
+	}
+
+	// eh_max out of range: a ChecksumError that says so, not a mere mismatch.
+	bad := make([]byte, 4096)
+	binary.LittleEndian.PutUint16(bad[4:], 0xFFFF)
+	err := verifyExtentBlockCsum(csb, 5, 7, 99, bad)
+	var ce *ChecksumError
+	if !errors.As(err, &ce) || ce.Kind != "extent block" || ce.Detail == "" || ce.Block != 99 || ce.Inode != 5 {
+		t.Fatalf("eh_max out of range: got %v", err)
+	}
+	// Without enforcement nothing is checked.
+	if err := verifyExtentBlockCsum(plain, 5, 7, 99, bad); err != nil {
+		t.Fatalf("plain filesystem verified: %v", err)
+	}
+}
