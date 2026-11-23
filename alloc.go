@@ -154,6 +154,12 @@ func readBitmap(f readerWriterAt, fsOffset int64, sb *superblock, bitmapBlock ui
 				return nil, cerr
 			}
 		}
+		if ok && isBlock && sb.tracksUnused() && d.Flags&bgBlockUninit != 0 {
+			bmap = synthBlockBitmap(sb, g, d, len(bmap))
+		}
+		if ok && !isBlock && d.inodeUninit(sb) {
+			bmap = synthInodeBitmap(sb, len(bmap))
+		}
 		if ok {
 			// Merge reserved bits (if any)
 			key := bitmapLockKey(f, g, isBlock)
@@ -312,6 +318,13 @@ func stageDescriptorUpdate(tx *Transaction, f readerWriterAt, fsOffset int64, sb
 	merged := make([]byte, sb.DescSize)
 	copy(merged, blockBuf[offInBlock:offInBlock+int(sb.DescSize)])
 	for _, r := range ownedRanges {
+		if r[0] == 0x12 {
+			// bg_flags is shared by the inode and block allocators, and an
+			// allocation only ever clears a flag: keep what the other cleared.
+			le := binary.LittleEndian
+			le.PutUint16(merged[0x12:], le.Uint16(merged[0x12:])&le.Uint16(d.raw[0x12:]))
+			continue
+		}
 		copy(merged[r[0]:r[1]], d.raw[r[0]:r[1]])
 	}
 
@@ -329,8 +342,9 @@ func stageDescriptorUpdate(tx *Transaction, f readerWriterAt, fsOffset int64, sb
 // descriptors) and the per-bitmap checksum fields, but deliberately NOT the
 // shared bg_checksum which stageDescriptorUpdate recomputes.
 func blockAllocDescRanges(sb *superblock) [][2]int {
-	// free_blocks_count_lo (0x0C..0x0E) + block_bitmap_csum_lo (0x18..0x1A)
-	r := [][2]int{{0x0C, 0x0E}, {0x18, 0x1A}}
+	// free_blocks_count_lo (0x0C..0x0E) + bg_flags (0x12..0x14: BLOCK_UNINIT is
+	// cleared by the first allocation) + block_bitmap_csum_lo (0x18..0x1A)
+	r := [][2]int{{0x0C, 0x0E}, {0x12, 0x14}, {0x18, 0x1A}}
 	if int(sb.DescSize) >= 64 {
 		r = append(r, [2]int{0x2C, 0x2E}) // free_blocks_count_hi
 		r = append(r, [2]int{0x38, 0x3A}) // block_bitmap_csum_hi
@@ -340,13 +354,14 @@ func blockAllocDescRanges(sb *superblock) [][2]int {
 
 func inodeAllocDescRanges(sb *superblock) [][2]int {
 	// free_inodes_count_lo (0x0E..0x10), used_dirs_count_lo (0x10..0x12),
+	// bg_flags (0x12..0x14: INODE_UNINIT is cleared by the first allocation),
 	// inode_bitmap_csum_lo (0x1A..0x1C), itable_unused_lo (0x1C..0x1E)
-	r := [][2]int{{0x0E, 0x10}, {0x10, 0x12}, {0x1A, 0x1C}, {0x1C, 0x1E}}
+	r := [][2]int{{0x0E, 0x10}, {0x10, 0x12}, {0x12, 0x14}, {0x1A, 0x1C}, {0x1C, 0x1E}}
 	if int(sb.DescSize) >= 64 {
 		r = append(r, [2]int{0x2E, 0x30}) // free_inodes_count_hi
 		r = append(r, [2]int{0x30, 0x32}) // used_dirs_count_hi
+		r = append(r, [2]int{0x32, 0x34}) // itable_unused_hi
 		r = append(r, [2]int{0x3A, 0x3C}) // inode_bitmap_csum_hi
-		r = append(r, [2]int{0x3C, 0x3E}) // itable_unused_hi
 	}
 	return r
 }
@@ -461,6 +476,7 @@ func allocInode(f readerWriterAt, fsOffset int64, sb *superblock, isDir bool) (u
 			continue
 		}
 		setBit(bmap, bit)
+		d.noteInodeAllocated(sb, bit)
 		d.FreeInodesCount--
 		if isDir {
 			d.UsedDirsCount++
@@ -718,6 +734,7 @@ func allocInodeWithTx(f readerWriterAt, fsOffset int64, sb *superblock, isDir bo
 			continue
 		}
 		setBit(bmap, bit)
+		d.noteInodeAllocated(sb, bit)
 		d.FreeInodesCount--
 		if isDir {
 			d.UsedDirsCount++
@@ -984,6 +1001,7 @@ func allocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint32) ([]
 		}
 		reserveBitmapBits(f, sb, g, true, reserveList, true)
 		d.FreeBlocksCount -= n
+		d.noteBlocksAllocated(sb)
 		if ext4LockDebug {
 			debugPrintf("DEBUG allocBlocks d.FreeBlocksCount after dec=%d sb.FreeBlocksCount=%d group=%d bits=%v\n", d.FreeBlocksCount, atomic.LoadUint64(&sb.FreeBlocksCount), g, reserveList)
 		}
@@ -1314,6 +1332,7 @@ func lockedAllocBlocks(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 		}
 		reserveBitmapBits(f, sb, g, true, reserveList, true)
 		d.FreeBlocksCount -= n
+		d.noteBlocksAllocated(sb)
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
 		stampBGDCsum(sb, g, d.raw)
@@ -1505,6 +1524,7 @@ func allocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n uint3
 		}
 		reserveBitmapBits(f, sb, g, true, reserveList, true)
 		d.FreeBlocksCount -= n
+		d.noteBlocksAllocated(sb)
 
 		// If the caller provided a transaction, prefer preparing updates
 		// into that tx regardless of whether `journalFor(f)` would find a
@@ -1853,6 +1873,7 @@ func lockedAllocBlocksWithTx(f readerWriterAt, fsOffset int64, sb *superblock, n
 		}
 		reserveBitmapBits(f, sb, g, true, reserveList, true)
 		d.FreeBlocksCount -= n
+		d.noteBlocksAllocated(sb)
 		setBitmapCsum(sb, g, d, true, bmap)
 		d.encode(sb)
 		stampBGDCsum(sb, g, d.raw)

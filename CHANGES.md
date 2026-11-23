@@ -3,6 +3,15 @@ Changelog
 
 Recent local changes:
 
+- Unused-inode count and uninit flags (PATCH, fixes #50): on a `metadata_csum`
+  or `uninit_bg` filesystem the writer now maintains `bg_itable_unused` and
+  `bg_flags` (the descriptor was only carrying them through unread). The first
+  inode allocated in a group clears `INODE_UNINIT` and lowers the unused count
+  to the inodes above it, the first block allocated clears `BLOCK_UNINIT`, and
+  the bitmaps of uninitialised groups are read as the kernel synthesises them
+  (padding bits and group overhead set), so `e2fsck -fn` no longer reports
+  invalid unused-inode counts or uninit-flag errors on images this package wrote.
+
 - Extent block checksums (MINOR, behaviour change, fixes #46): the writer
   now stamps the `ext4_extent_tail` checksum on every extent block it
   creates (file growth, truncation, rewrite, directory growth), and the reader
