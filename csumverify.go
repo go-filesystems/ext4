@@ -35,9 +35,13 @@ package filesystem_ext4
 // instead of being served as genuine -- and, just as important, is never read
 // back and re-stamped by a later write, which would launder the corruption.
 //
-// Extent tree blocks (et_checksum at 12+eh_max*12) are NOT verified yet: the
-// writer in this package creates those blocks without the tail, so enforcing
-// it would make the driver reject its own output. See the follow-up in the PR.
+// Extent tree blocks (any block below the inode's in-inode root) end with a
+// struct ext4_extent_tail whose et_checksum, at 12+eh_max*12, is
+//
+//	extent block    crc32c(seed, le32 ino, le32 generation, block up to the tail)
+//
+// (ext4_extent_block_csum). The writer stamps it on every extent block it
+// creates (stampExtentBlockCsum) and parseExtentNode verifies it on read.
 
 import (
 	"encoding/binary"
@@ -59,7 +63,7 @@ var ErrChecksum = errors.New("ext4: metadata checksum mismatch")
 // ChecksumError reports a metadata structure whose stored checksum does not
 // match the one computed from its contents. Use errors.As to retrieve it.
 type ChecksumError struct {
-	Kind     string // "superblock", "group descriptor", "inode", "directory block", "directory index block", "block bitmap", "inode bitmap"
+	Kind     string // "superblock", "group descriptor", "inode", "directory block", "directory index block", "extent block", "block bitmap", "inode bitmap"
 	Inode    uint32 // owning inode, when the structure belongs to one
 	Group    uint32 // block group, when the structure belongs to one
 	Block    uint64 // physical block, when the structure is a block
@@ -75,7 +79,7 @@ func (e *ChecksumError) Error() string {
 		where = fmt.Sprintf(" %d", e.Inode)
 	case "group descriptor", "block bitmap", "inode bitmap":
 		where = fmt.Sprintf(" of group %d", e.Group)
-	case "directory block", "directory index block":
+	case "directory block", "directory index block", "extent block":
 		where = fmt.Sprintf(" (block %d, inode %d)", e.Block, e.Inode)
 	}
 	if e.Detail != "" {
@@ -254,6 +258,52 @@ func verifyBitmapCsum(sb *superblock, g uint32, d *bgd, isBlockBitmap bool, bmap
 	}
 	if got != want {
 		return &ChecksumError{Kind: kind, Group: g, Stored: got, Computed: want}
+	}
+	return nil
+}
+
+// extentBlockCsum computes the et_checksum of extent block buf for inode num
+// of generation gen, and returns the offset of the 4-byte tail that holds it.
+// ok is false when eh_max puts the tail outside the block.
+func extentBlockCsum(sb *superblock, num, gen uint32, buf []byte) (csum uint32, tail int, ok bool) {
+	if len(buf) < 12 {
+		return 0, 0, false
+	}
+	le := binary.LittleEndian
+	tail = 12 + int(le.Uint16(buf[4:]))*12
+	if tail+4 > len(buf) {
+		return 0, 0, false
+	}
+	var nb, gb [4]byte
+	le.PutUint32(nb[:], num)
+	le.PutUint32(gb[:], gen)
+	c := crc32c(crc32c(sb.csumSeed(), nb[:]), gb[:])
+	return crc32c(c, buf[:tail]), tail, true
+}
+
+// stampExtentBlockCsum writes et_checksum into extent block buf (write side of
+// verifyExtentBlockCsum). It is a no-op unless metadata_csum is set.
+func stampExtentBlockCsum(sb *superblock, num, gen uint32, buf []byte) {
+	if sb == nil || sb.FeatureROCompat&FeatROCompatMetadataCsum == 0 {
+		return
+	}
+	if c, tail, ok := extentBlockCsum(sb, num, gen, buf); ok {
+		binary.LittleEndian.PutUint32(buf[tail:], c)
+	}
+}
+
+// verifyExtentBlockCsum checks the et_checksum of extent block buf (physical
+// block phys) of inode num / generation gen.
+func verifyExtentBlockCsum(sb *superblock, num, gen uint32, phys uint64, buf []byte) error {
+	if !sb.csumEnforced() {
+		return nil
+	}
+	want, tail, ok := extentBlockCsum(sb, num, gen, buf)
+	if !ok {
+		return &ChecksumError{Kind: "extent block", Inode: num, Block: phys, Detail: "eh_max puts the checksum tail outside the block"}
+	}
+	if got := binary.LittleEndian.Uint32(buf[tail:]); got != want {
+		return &ChecksumError{Kind: "extent block", Inode: num, Block: phys, Stored: got, Computed: want}
 	}
 	return nil
 }

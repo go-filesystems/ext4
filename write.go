@@ -75,6 +75,7 @@ func writeExtentTree(f readerWriterAt, fsOffset int64, sb *superblock, in *inode
 		le.PutUint16(childBuf[off+6:], uint16(e.PhysBlock>>32))
 		le.PutUint32(childBuf[off+8:], uint32(e.PhysBlock&0xFFFFFFFF))
 	}
+	stampExtentBlockCsum(sb, in.num, in.generation(), childBuf)
 
 	if tx != nil {
 		off := fsOffset + int64(childBlock)*int64(sb.BlockSize)
@@ -132,7 +133,7 @@ func writeExtentTree(f readerWriterAt, fsOffset int64, sb *superblock, in *inode
 // IO work outside of any inode locks so callers can update the in-memory
 // inode metadata under a short critical section and then persist the inode
 // (which itself will do IO outside the inode lock via writeInode).
-func prepareExtentChild(f readerWriterAt, fsOffset int64, sb *superblock, exts []extentLeaf, tx *Transaction) (uint64, func(), error) {
+func prepareExtentChild(f readerWriterAt, fsOffset int64, sb *superblock, ino *inode, exts []extentLeaf, tx *Transaction) (uint64, func(), error) {
 	// Compute leaf capacity and validate.
 	leafCap := int((int(sb.BlockSize) - 12) / 12)
 	if len(exts) > leafCap {
@@ -200,6 +201,7 @@ func prepareExtentChild(f readerWriterAt, fsOffset int64, sb *superblock, exts [
 		le.PutUint16(childBuf[off+6:], uint16(e.PhysBlock>>32))
 		le.PutUint32(childBuf[off+8:], uint32(e.PhysBlock&0xFFFFFFFF))
 	}
+	stampExtentBlockCsum(sb, ino.num, ino.generation(), childBuf)
 
 	// If a transaction is provided, add the prepared child block to the
 	// transaction instead of writing it immediately. This lets callers
@@ -617,7 +619,7 @@ func writeFile(f readerWriterAt, baseF readerWriterAt, pj *Journal, fsOffset int
 		// to point to the child block. If a transaction `tx` is active,
 		// pass it so the prepared child block is grouped with data and
 		// inode bytes.
-		childBlock, childCleanup, err := prepareExtentChild(f, fsOffset, sb, exts, tx)
+		childBlock, childCleanup, err := prepareExtentChild(f, fsOffset, sb, ino, exts, tx)
 		if err != nil {
 			if tx != nil {
 				_ = tx.Abort()
