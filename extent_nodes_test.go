@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 type nodeMem struct{ b []byte }
@@ -195,6 +196,60 @@ func TestDecrementAndFreeInodeReportsWriteFailure(t *testing.T) {
 		}
 		if err == nil {
 			t.Fatalf("write %d failed and the deletion reported success", n)
+		}
+	}
+}
+
+// Every write a directory removal makes may fail; each failure must surface,
+// including the write-back of the scrubbed inode.
+func TestRemoveDirTreeReportsEachWriteFailure(t *testing.T) {
+	for n := 1; n <= 40; n++ {
+		fs := plainFS(t)
+		if err := fs.MkDir("/d", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		w := &failFirstWrite{readerWriterAt: fs.f, failAt: n}
+		err := removeDirTree(w, fs.partOffset, fs.sb, "/d")
+		if !w.failed {
+			if n == 1 {
+				t.Fatal("no write was made")
+			}
+			return
+		}
+		if err == nil {
+			t.Fatalf("write %d failed and the removal reported success", n)
+		}
+	}
+	t.Fatal("removal made more than 40 writes: raise the bound")
+}
+
+// A freed bit that has no pending want entry was already applied and retired
+// by the dispatcher; unreserving it must not wait out the polling bound.
+func TestUnreserveWithoutWantReturnsPromptly(t *testing.T) {
+	fs := plainFS(t)
+	reserveBitmapBits(fs.f, fs.sb, 0, true, []int{5}, false)
+	const free = 8000 // a free bit of group 0 on an 8M image
+	start := time.Now()
+	unreserveBitmapBits(fs.f, fs.partOffset, fs.sb, 0, true, []int{free})
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("unreserve waited %v for a bit nothing was waiting on", d)
+	}
+}
+
+// A retired bit that is still set on disk (so a default of "cleared" would
+// mismatch) must be skipped, whether or not another bit of the call is pending.
+func TestUnreserveSkipsRetiredBitsStillSet(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		fs := plainFS(t)
+		bits := []int{0} // bit 0 of group 0 is allocated on disk, nothing waits on it
+		if pending {
+			reserveBitmapBits(fs.f, fs.sb, 0, true, []int{8001}, false)
+			bits = append(bits, 8001)
+		}
+		start := time.Now()
+		unreserveBitmapBits(fs.f, fs.partOffset, fs.sb, 0, true, bits)
+		if d := time.Since(start); d > 2*time.Second {
+			t.Fatalf("pending=%v: unreserve waited %v for a retired bit", pending, d)
 		}
 	}
 }

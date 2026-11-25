@@ -518,7 +518,9 @@ func addDirEntryWithTx(tx *Transaction, f readerWriterAt, fsOffset int64, sb *su
 	binary.LittleEndian.PutUint32(dirIno.raw[inodeOffFlags:], flags)
 
 	dirIno.setSize(uint64(logBlock+1) * uint64(sb.BlockSize))
-	dirIno.setBlocks512(uint32(logBlock+1) * (sb.BlockSize / 512))
+	// i_blocks counts every block the inode owns: the data blocks plus the
+	// extent-tree child block the index entry above points to.
+	dirIno.setBlocks512(uint32(logBlock+2) * (sb.BlockSize / 512))
 
 	// Short critical section: compute checksum and copy on-disk inode
 	// bytes, then release the lock and either add to the transaction or
