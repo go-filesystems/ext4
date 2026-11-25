@@ -6,6 +6,7 @@ import (
 	"fmt"
 	iofs "io/fs"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-volumes/safeio"
 )
@@ -139,7 +140,31 @@ func decrementAndFreeInode(f readerWriterAt, fsOffset int64, sb *superblock, in 
 	if err := freeInodeBlocks(f, fsOffset, sb, in); err != nil {
 		return err
 	}
+	// Leave the inode as the kernel does on eviction (ext4_evict_inode,
+	// ext4_truncate, ext4_free_inode): no links, a deletion time, no size, no
+	// blocks, an empty extent tree. Without it e2fsck sees an inode that still
+	// owns blocks the bitmap says are free.
+	scrubFreedInode(in, uint32(time.Now().Unix()))
+	if err := writeInode(f, fsOffset, sb, in); err != nil {
+		return err
+	}
 	return freeInodeSlot(f, fsOffset, sb, in.num)
+}
+
+// scrubFreedInode clears what a deleted inode no longer owns and stamps i_dtime.
+func scrubFreedInode(in *inode, dtime uint32) {
+	le := binary.LittleEndian
+	le.PutUint16(in.raw[inodeOffLinksCount:], 0)
+	le.PutUint32(in.raw[inodeOffDtime:], dtime)
+	in.setSize(0)
+	in.setBlocks512(0)
+	le.PutUint16(in.raw[inodeOffBlocksHi:], 0)
+	if in.flags()&InodeFlagExtents != 0 {
+		blk := in.raw[inodeOffBlock : inodeOffBlock+60]
+		clear(blk)
+		le.PutUint16(blk[0:], ExtentMagic)
+		le.PutUint16(blk[4:], 4) // eh_max: four inline entries
+	}
 }
 
 // freeInodeSlot marks inode inodeNum as free in its block group bitmap.
