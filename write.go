@@ -976,6 +976,11 @@ func freeInodeBlocks(f readerWriterAt, fsOffset int64, sb *superblock, in *inode
 	if err != nil {
 		return err
 	}
+	// The index and leaf blocks of a deep tree are the inode's blocks too.
+	nodes, err := extentNodeBlocks(f, fsOffset, sb, in)
+	if err != nil {
+		return err
+	}
 	for _, e := range exts {
 		for blk := uint64(0); blk < uint64(e.Count); blk++ {
 			phys := e.PhysBlock + blk
@@ -984,5 +989,51 @@ func freeInodeBlocks(f readerWriterAt, fsOffset int64, sb *superblock, in *inode
 			}
 		}
 	}
+	for _, n := range nodes {
+		if err := freeBlock(f, fsOffset, sb, n); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// extentNodeBlocks lists the blocks that hold the inode's extent tree below the
+// root (the root lives in i_block). in.extents has already validated the tree,
+// so a malformed node here only ends the walk with an error.
+func extentNodeBlocks(f readerWriterAt, fsOffset int64, sb *superblock, in *inode) ([]uint64, error) {
+	le := binary.LittleEndian
+	type node struct {
+		buf   []byte
+		depth uint16
+	}
+	root := in.raw[inodeOffBlock : inodeOffBlock+60]
+	stack := []node{{root, le.Uint16(root[6:])}}
+	seen := map[uint64]bool{}
+	var out []uint64
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n.depth == 0 {
+			continue
+		}
+		if n.depth > maxExtentDepth {
+			return nil, fmt.Errorf("ext4: extent tree depth %d in inode %d", n.depth, in.num)
+		}
+		entries := int(le.Uint16(n.buf[2:]))
+		for i := 0; i < entries && 12+(i+1)*12 <= len(n.buf); i++ {
+			e := n.buf[12+i*12:]
+			child := uint64(le.Uint16(e[8:]))<<32 | uint64(le.Uint32(e[4:]))
+			if child == 0 || (sb.BlocksCount != 0 && child >= sb.BlocksCount) || seen[child] {
+				return nil, fmt.Errorf("ext4: bad extent index block %d in inode %d", child, in.num)
+			}
+			seen[child] = true
+			out = append(out, child)
+			buf, err := readRawBlock(f, fsOffset, sb, child)
+			if err != nil {
+				return nil, err
+			}
+			stack = append(stack, node{buf, n.depth - 1})
+		}
+	}
+	return out, nil
 }

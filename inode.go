@@ -12,6 +12,7 @@ import (
 const (
 	inodeOffMode       = 0
 	inodeOffSizeLo     = 4
+	inodeOffDtime      = 20
 	inodeOffLinksCount = 26
 	inodeOffFlags      = 32
 	inodeOffBlock      = 40 // 60 bytes: extent tree or block map

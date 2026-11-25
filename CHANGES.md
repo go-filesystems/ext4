@@ -3,6 +3,13 @@ Changelog
 
 Recent local changes:
 
+- DeleteFile scrubs the inode it frees (PATCH): when the last link goes, the
+  inode now gets links 0, an `i_dtime`, size 0, no blocks and an empty extent
+  tree, and the blocks of a multi-level extent tree (index and leaf blocks)
+  are freed with the data blocks. Before, `e2fsck -fn` reported the freed
+  inodes as unattached and their blocks as in use. Removing one name of a
+  hardlinked file only decrements the link count (now covered by a test).
+
 - Unused-inode count and uninit flags (PATCH, fixes #50): on a `metadata_csum`
   or `uninit_bg` filesystem the writer now maintains `bg_itable_unused` and
   `bg_flags` (the descriptor was only carrying them through unread). The first
