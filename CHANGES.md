@@ -3,6 +3,22 @@ Changelog
 
 Recent local changes:
 
+- SECURITY (PATCH, v0.7.4): the library no longer writes anything outside the
+  image it was given. v0.7.1 to v0.7.3 (and earlier releases carrying the same
+  code) wrote debug logs, forensic snapshots of block-group descriptors and
+  bitmaps, and raw block dumps to fixed or predictable paths under `/tmp`,
+  several of them unconditionally. Those files were opened with `O_CREATE`
+  and no `O_EXCL`/`O_NOFOLLOW`, so a pre-created file or symlink in a shared
+  `/tmp` could redirect the writes. They also leaked volume metadata and block
+  contents, and grew without bound. Diagnostics now go only to the bounded
+  in-memory buffer read with `DumpDebugLog`, and only when `EXT4_LOCK_DEBUG=1`.
+  `EXT4_LOCK_DEBUG_FILE`, `EXT4_DUMP_TX_BLOCKS` and `EXT4_DUMP_DIRBLOCKS` no
+  longer write files. Two tests guard this: one fails if library source names
+  a temporary path, and one runs a write/delete workload with every diagnostic
+  switch on and asserts that no file appeared under `/tmp` or `TMPDIR`.
+  Upgrade: replace v0.7.1 to v0.7.3 with v0.7.4, and delete any leftover
+  `/tmp/ext4_*` files.
+
 - Delete path fixes (PATCH, v0.7.3): `DeleteDir` now scrubs the removed
   directory inode (links 0, `i_dtime`, size 0, no blocks), decrements
   `bg_used_dirs_count` and keeps the checksums right; the parent's link count

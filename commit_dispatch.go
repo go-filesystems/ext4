@@ -398,13 +398,6 @@ func init() {
 	}
 }
 
-// appliedDumpPath returns a unique path for writing applied-block
-// diagnostics. Include PID and a nanosecond timestamp so multiple
-// writes for the same seq/block don't clobber each other.
-func appliedDumpPath(seq uint64, blk uint64) string {
-	return fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_applied-%d-%d.bin", seq, blk, os.Getpid(), time.Now().UnixNano())
-}
-
 func ensureCommitWorker(key string) *commitWorker {
 	commitWorkersMu.Lock()
 	defer commitWorkersMu.Unlock()
@@ -476,19 +469,6 @@ func (w *commitWorker) run() {
 							lastBitmap = make([]byte, len(op.data))
 							copy(lastBitmap, op.data)
 							lastBitmapStartAbs = op.startAbs
-							// Optionally dump applied bitmap bytes for diagnostics
-							if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" {
-								bs := int64(t.sb.BlockSize)
-								var blk uint64
-								if t.fsOffset <= op.startAbs {
-									blk = uint64((op.startAbs - t.fsOffset) / bs)
-								} else {
-									blk = 0
-								}
-								dumpPath := appliedDumpPath(t.seq, blk)
-								_ = os.WriteFile(dumpPath, op.data, 0644)
-								debugPrintf("DEBUG commitWorker seq=%d dumped applied block=%d path=%s ts=%d\n", t.seq, blk, dumpPath, time.Now().UnixNano())
-							}
 						} else if len(op.data) == int(t.sb.DescSize) {
 							// Decode FreeBlocksCount from descriptor bytes.
 							le := binary.LittleEndian
@@ -614,22 +594,6 @@ func (w *commitWorker) run() {
 							d.encode(t.sb)
 							stampBGDCsum(t.sb, uint32(t.group), d.raw)
 
-							// Focused forensic snapshot: when a BGD write occurs for a
-							// sequence of interest (set via EXT4_FOCUS_SEQ), capture the
-							// descriptor and the last-seen bitmap bytes so we have an
-							// authoritative on-disk artifact for post-mortem analysis.
-							if ext4LockDebug {
-								if fsEnv := os.Getenv("EXT4_FOCUS_SEQ"); fsEnv != "" {
-									if fsVal, err := strconv.ParseUint(fsEnv, 10, 64); err == nil {
-										if fsVal == t.seq {
-											key := bitmapLockKey(t.f, t.group, true)
-											// run async to avoid blocking the worker
-											go dumpForensicSnapshot(key, nil, nil, d, lastBitmap)
-											debugPrintf("DEBUG commitWorker forensicDump seq=%d key=%s ts=%d\n", t.seq, key, time.Now().UnixNano())
-										}
-									}
-								}
-							}
 						}
 					}
 					var werr error
@@ -658,26 +622,6 @@ func (w *commitWorker) run() {
 						break
 					}
 
-					// Optional read-back of applied bytes for diagnostics. This ensures
-					// we capture what actually landed on disk even when earlier
-					// heuristics didn't create an applied dump.
-					if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && t.f != nil && t.sb != nil {
-						bs := int64(t.sb.BlockSize)
-						var blk uint64
-						if t.fsOffset <= op.startAbs {
-							blk = uint64((op.startAbs - t.fsOffset) / bs)
-						} else {
-							blk = 0
-						}
-						buf := make([]byte, bs)
-						if _, rerr := t.f.ReadAt(buf, op.startAbs); rerr == nil {
-							dumpPath := appliedDumpPath(t.seq, blk)
-							_ = os.WriteFile(dumpPath, buf, 0644)
-							debugPrintf("DEBUG commitWorker seq=%d dumped applied block(readback)=%d path=%s ts=%d\n", t.seq, blk, dumpPath, time.Now().UnixNano())
-						} else if ext4LockDebug {
-							debugPrintf("DEBUG commitWorker readback failed seq=%d blk=%d err=%v\n", t.seq, blk, rerr)
-						}
-					}
 					// Log completion so we observe actual write completions (post-IO).
 					if len(op.data) > 0 {
 						debugPrintf("DEBUG commitWorker completed write seq=%d group=%d idx=%d startAbs=%d len=%d addr=%p\n", t.seq, t.group, idx, op.startAbs, len(op.data), &op.data[0])
@@ -693,25 +637,6 @@ func (w *commitWorker) run() {
 						break
 					}
 
-					// Read-back applied bytes for diagnostics when requested. This
-					// captures what was actually written to the backing file.
-					if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && t.f != nil && t.sb != nil {
-						bs := int64(t.sb.BlockSize)
-						var blk uint64
-						if t.fsOffset <= op.startAbs {
-							blk = uint64((op.startAbs - t.fsOffset) / bs)
-						} else {
-							blk = 0
-						}
-						buf := make([]byte, bs)
-						if _, rerr := t.f.ReadAt(buf, op.startAbs); rerr == nil {
-							dumpPath := appliedDumpPath(t.seq, blk)
-							_ = os.WriteFile(dumpPath, buf, 0644)
-							debugPrintf("DEBUG commitWorker seq=%d dumped applied block(readback)=%d path=%s ts=%d\n", t.seq, blk, dumpPath, time.Now().UnixNano())
-						} else if ext4LockDebug {
-							debugPrintf("DEBUG commitWorker readback failed seq=%d blk=%d err=%v\n", t.seq, blk, rerr)
-						}
-					}
 				}
 			}
 			if t.ack != nil {
@@ -771,21 +696,6 @@ func enqueueCommitWritesUnderLock(f readerWriterAt, fsOffset int64, sb *superblo
 		// Try to eagerly attach seq to any existing reservations for this
 		// backing group.
 		attachSeqToReservations(f, fsOffset, sb, group, seq, ops)
-		// Optionally dump prepared op data for diagnostics when no worker is used.
-		if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && sb != nil {
-			bs := int64(sb.BlockSize)
-			for _, op := range ops {
-				if len(op.data) == int(bs) {
-					var blk uint64
-					if fsOffset <= op.startAbs {
-						blk = uint64((op.startAbs - fsOffset) / bs)
-					}
-					dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_prepared.bin", seq, blk)
-					_ = os.WriteFile(dumpPath, op.data, 0644)
-					debugPrintf("DEBUG enqueueCommitWrites f==nil seq=%d dumped prepared block=%d path=%s ts=%d\n", seq, blk, dumpPath, time.Now().UnixNano())
-				}
-			}
-		}
 		go func(seq uint64, ack chan error) {
 			var lastErr error
 			for _, op := range ops {
@@ -812,20 +722,6 @@ func enqueueCommitWritesUnderLock(f readerWriterAt, fsOffset int64, sb *superblo
 		// Record seq->info already done by claimOrAllocateSeq; eagerly associate
 		// while still holding caller locks to avoid racing deletions.
 		attachSeqToReservations(f, fsOffset, sb, group, seq, ops)
-		if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && sb != nil {
-			bs := int64(sb.BlockSize)
-			for _, op := range ops {
-				if len(op.data) == int(bs) {
-					var blk uint64
-					if fsOffset <= op.startAbs {
-						blk = uint64((op.startAbs - fsOffset) / bs)
-					}
-					dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_prepared.bin", seq, blk)
-					_ = os.WriteFile(dumpPath, op.data, 0644)
-					debugPrintf("DEBUG enqueueCommitWrites inline seq=%d dumped prepared block=%d path=%s ts=%d\n", seq, blk, dumpPath, time.Now().UnixNano())
-				}
-			}
-		}
 		var lastErr error
 		for _, op := range ops {
 			if _, err := writeAtWithTrace(f, fsOffset, sb, op.startAbs, op.data); err != nil {
@@ -861,21 +757,6 @@ func enqueueCommitWritesUnderLock(f readerWriterAt, fsOffset int64, sb *superblo
 	// attach sequence with reservations for this group while still under the
 	// caller's BGD lock so racing associations see it.
 	attachSeqToReservations(f, fsOffset, sb, group, t.seq, ops)
-	// Optionally dump prepared op data for diagnostics before enqueue.
-	if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && sb != nil {
-		bs := int64(sb.BlockSize)
-		for _, op := range ops {
-			if len(op.data) == int(bs) {
-				var blk uint64
-				if fsOffset <= op.startAbs {
-					blk = uint64((op.startAbs - fsOffset) / bs)
-				}
-				dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_prepared.bin", t.seq, blk)
-				_ = os.WriteFile(dumpPath, op.data, 0644)
-				debugPrintf("DEBUG enqueueCommitWrites queued seq=%d dumped prepared block=%d path=%s ts=%d\n", t.seq, blk, dumpPath, time.Now().UnixNano())
-			}
-		}
-	}
 	select {
 	case w.tasks <- t:
 		if ext4LockDebug {
@@ -887,20 +768,6 @@ func enqueueCommitWritesUnderLock(f readerWriterAt, fsOffset int64, sb *superblo
 		ack := make(chan error, 1)
 		seq := claimOrAllocateSeq(f, fsOffset, sb, group)
 		registerAckSeq(ack, seq)
-		if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" && sb != nil {
-			bs := int64(sb.BlockSize)
-			for _, op := range ops {
-				if len(op.data) == int(bs) {
-					var blk uint64
-					if fsOffset <= op.startAbs {
-						blk = uint64((op.startAbs - fsOffset) / bs)
-					}
-					dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_prepared.bin", seq, blk)
-					_ = os.WriteFile(dumpPath, op.data, 0644)
-					debugPrintf("DEBUG enqueueCommitWrites fallback seq=%d dumped prepared block=%d path=%s ts=%d\n", seq, blk, dumpPath, time.Now().UnixNano())
-				}
-			}
-		}
 		go func(seq uint64, ack chan error) {
 			var lastErr error
 			for _, op := range ops {
