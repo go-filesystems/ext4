@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -134,12 +135,7 @@ var (
 // The returned cleanup function should be deferred by the caller.
 func NewTempFS(t testing.TB) (*Ext4FS, func()) {
 	t.Helper()
-	f, err := os.CreateTemp("", "ext4test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	f.Close()
+	path := filepath.Join(t.TempDir(), "ext4test.img")
 	// Use a larger default image for tests to avoid allocation exhaustion
 	// during heavy concurrent test workloads.
 	fsi, err := Format(path, 4096*4096, FormatConfig{})
@@ -160,12 +156,7 @@ func NewTempFS(t testing.TB) (*Ext4FS, func()) {
 // function should be deferred by the caller.
 func NewTempFSWithSize(t testing.TB, sizeBytes int64) (*Ext4FS, func()) {
 	t.Helper()
-	f, err := os.CreateTemp("", "ext4test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := f.Name()
-	f.Close()
+	path := filepath.Join(t.TempDir(), "ext4test.img")
 	fsi, err := Format(path, sizeBytes, FormatConfig{})
 	if err != nil {
 		os.Remove(path)

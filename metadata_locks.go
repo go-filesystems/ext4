@@ -159,18 +159,6 @@ var bitmapGroupLocks = map[string]*tryMutex{}
 var reservedBitsMu sync.Mutex
 var reservedBits = map[string][]byte{}
 
-// appendImmediate writes a short line to a debug file under /tmp.
-// This is intentionally unconditional to aid timing-sensitive
-// instrumentation during test runs.
-func appendImmediate(path, s string) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	_, _ = f.WriteString(s + "\n")
-	_ = f.Close()
-}
-
 // reservationInfo records the intended on-disk value for a reserved bit and
 // an optional ack/seq that will be signalled when the dispatch task that
 // persisted the change has completed. This allows callers to wait for the
@@ -455,7 +443,7 @@ func reserveBitmapBits(f readerWriterAt, sb *superblock, group uint32, isBlock b
 		if ext4LockDebug {
 			debugPrintf("DEBUG reserveBitmapBits preassigned seq=%d key=%s\n", s, key)
 		}
-		appendImmediate("/tmp/ext4_reserve_debug.log", fmt.Sprintf("reserve preassign key=%s seq=%d ts=%d", key, s, time.Now().UnixNano()))
+		appendImmediate("reserve", fmt.Sprintf("reserve preassign key=%s seq=%d ts=%d", key, s, time.Now().UnixNano()))
 	}
 	reservedBitsMu.Lock()
 	defer reservedBitsMu.Unlock()
@@ -496,27 +484,17 @@ func reserveBitmapBits(f readerWriterAt, sb *superblock, group uint32, isBlock b
 				if ext4LockDebug {
 					debugPrintf("DEBUG reserveBitmapBits eagerAssociate seq=%d key=%s bit=%d ts=%d\n", ri.seq, key, bit, time.Now().UnixNano())
 				}
-				appendImmediate("/tmp/ext4_reserve_debug.log", fmt.Sprintf("reserve eagerAssoc key=%s bit=%d seq=%d ts=%d", key, bit, ri.seq, time.Now().UnixNano()))
+				appendImmediate("reserve", fmt.Sprintf("reserve eagerAssoc key=%s bit=%d seq=%d ts=%d", key, bit, ri.seq, time.Now().UnixNano()))
 			}
 			// preserve any existing ack/seq association
 			wm[bit] = ri
 			// Immediate debug trace for reservation creation.
-			appendImmediate("/tmp/ext4_reserve_debug.log", fmt.Sprintf("reserve key=%s bit=%d want=%t ts=%d", key, bit, wantSet, ri.ts))
+			appendImmediate("reserve", fmt.Sprintf("reserve key=%s bit=%d want=%t ts=%d", key, bit, wantSet, ri.ts))
 		}
 	}
 
-	// For timing-sensitive debugging, capture a shallow copy of the
-	// reservation entries and emit a forensic snapshot asynchronously so
-	// watchers can inspect reservation state before any racing seq/ack
-	// bookkeeping removes the mapping. Copy under lock to avoid map races.
 	if ext4LockDebug {
 		if wm != nil {
-			wantCopy := make(map[int]reservationInfo, len(wm))
-			for k, v := range wm {
-				wantCopy[k] = v
-			}
-			// Non-blocking: run snapshot in background to avoid holding locks.
-			go dumpForensicSnapshot(key, bits, wantCopy, nil, nil)
 			// Spawn a short-lived watcher to attach any soon-to-be-created
 			// sequence to these reservations. This helps eliminate the TOCTOU
 			// where the worker removes the ack->seq mapping before the
@@ -560,7 +538,7 @@ func associateAckWithReservation(f readerWriterAt, group uint32, isBlock bool, b
 	}
 	key := bitmapLockKey(f, group, isBlock)
 	appendAssocLog(fmt.Sprintf("assoc start key=%s ack=%p ts=%d", key, ack, time.Now().UnixNano()))
-	appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc start key=%s ack=%p ts=%d", key, ack, time.Now().UnixNano()))
+	appendImmediate("assoc", fmt.Sprintf("assoc start key=%s ack=%p ts=%d", key, ack, time.Now().UnixNano()))
 
 	// Capture a pre-association forensic snapshot for any reserved bits that
 	// currently lack a seq. This helps diagnose races where the dispatcher
@@ -582,14 +560,11 @@ func associateAckWithReservation(f readerWriterAt, group uint32, isBlock bool, b
 			}
 		}
 		reservedBitsMu.Unlock()
-		if len(preBits) > 0 {
-			go dumpForensicSnapshot(key, preBits, preWant, nil, nil)
-		}
 	}
 	// Lookup dispatcher seq for this ack channel (if available)
 	seq, _ := getSeqForAck(ack)
 	appendAssocLog(fmt.Sprintf("assoc gotSeq key=%s ack=%p seq=%d ts=%d", key, ack, seq, time.Now().UnixNano()))
-	appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc gotSeq key=%s ack=%p seq=%d ts=%d", key, ack, seq, time.Now().UnixNano()))
+	appendImmediate("assoc", fmt.Sprintf("assoc gotSeq key=%s ack=%p seq=%d ts=%d", key, ack, seq, time.Now().UnixNano()))
 	// First, associate ack/seq under the reservedBitsMu and collect bits
 	// that didn't have an associated seq so we can detect a late-delivered
 	// ack (worker already sent it) outside the lock.
@@ -604,7 +579,7 @@ func associateAckWithReservation(f readerWriterAt, group uint32, isBlock bool, b
 				}
 				wm[bit] = ri
 				appendAssocLog(fmt.Sprintf("assoc underLock key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, ri.seq, ri.ack, time.Now().UnixNano()))
-				appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc underLock key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, ri.seq, ri.ack, time.Now().UnixNano()))
+				appendImmediate("assoc", fmt.Sprintf("assoc underLock key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, ri.seq, ri.ack, time.Now().UnixNano()))
 				if ext4LockDebug {
 					debugPrintf("DEBUG associateAckWithReservation key=%s bit=%d seq=%d ack=%p ts=%d\n", key, bit, ri.seq, ri.ack, time.Now().UnixNano())
 				}
@@ -623,7 +598,7 @@ func associateAckWithReservation(f readerWriterAt, group uint32, isBlock bool, b
 				}
 			} else {
 				appendAssocLog(fmt.Sprintf("assoc missingReservation key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, seq, ack, time.Now().UnixNano()))
-				appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc missingReservation key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, seq, ack, time.Now().UnixNano()))
+				appendImmediate("assoc", fmt.Sprintf("assoc missingReservation key=%s bit=%d seq=%d ack=%p ts=%d", key, bit, seq, ack, time.Now().UnixNano()))
 				if ext4LockDebug {
 					debugPrintf("DEBUG associateAckWithReservation missing reservation key=%s bit=%d seq=%d ack=%p ts=%d\n", key, bit, seq, ack, time.Now().UnixNano())
 				}
@@ -642,14 +617,14 @@ func associateAckWithReservation(f readerWriterAt, group uint32, isBlock bool, b
 			// Re-insert the ack value so the original waiter still receives it.
 			ack <- v
 			appendAssocLog(fmt.Sprintf("assoc lateAck key=%s ack=%p val=%v ts=%d", key, ack, v, time.Now().UnixNano()))
-			appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc lateAck key=%s ack=%p val=%v ts=%d", key, ack, v, time.Now().UnixNano()))
+			appendImmediate("assoc", fmt.Sprintf("assoc lateAck key=%s ack=%p val=%v ts=%d", key, ack, v, time.Now().UnixNano()))
 			reservedBitsMu.Lock()
 			if wm, ok := reservedWant[key]; ok {
 				if rb, rok := reservedBits[key]; rok {
 					for _, bit := range bitsNeedAckCheck {
 						if ri, ok2 := wm[bit]; ok2 && ri.ack == ack {
 							appendAssocLog(fmt.Sprintf("assoc clearing reserved bit(key=%s bit=%d) due to lateAck ack=%p ts=%d", key, bit, ack, time.Now().UnixNano()))
-							appendImmediate("/tmp/ext4_assoc_direct.log", fmt.Sprintf("assoc clearing reserved bit(key=%s bit=%d) due to lateAck ack=%p ts=%d", key, bit, ack, time.Now().UnixNano()))
+							appendImmediate("assoc", fmt.Sprintf("assoc clearing reserved bit(key=%s bit=%d) due to lateAck ack=%p ts=%d", key, bit, ack, time.Now().UnixNano()))
 							if bit >= 0 && bit/8 < len(rb) {
 								rb[bit/8] &^= 1 << uint(bit%8)
 								reservedBits[key] = rb
@@ -702,7 +677,7 @@ func unreserveBitmapBits(f readerWriterAt, fsOffset int64, sb *superblock, group
 		debugPrintf("DEBUG unreserveBitmapBits key=%s bits=%v\n", key, bits)
 	}
 	// Immediate trace for unreserve start
-	appendImmediate("/tmp/ext4_unreserve_debug.log", fmt.Sprintf("unreserve start key=%s bits=%v ts=%d", key, bits, time.Now().UnixNano()))
+	appendImmediate("unreserve", fmt.Sprintf("unreserve start key=%s bits=%v ts=%d", key, bits, time.Now().UnixNano()))
 	// If we can, prefer waiting for the authoritative commit acknowledgement
 	// associated with the reservation before clearing it. This ties the in-
 	// memory reservation lifecycle to the actual dispatcher task that
@@ -868,8 +843,6 @@ func unreserveBitmapBits(f readerWriterAt, fsOffset int64, sb *superblock, group
 				if !verified {
 					if ext4LockDebug {
 						if lastD != nil && lastBmap != nil {
-							// Emit an on-disk forensic snapshot to aid post-mortem inspection.
-							dumpForensicSnapshot(key, bits, wantMap, lastD, lastBmap)
 							// Log per-bit mismatches and bitmap-derived free count
 							for _, bit := range bits {
 								ri, ok := wantMap[bit]
@@ -1112,8 +1085,6 @@ func unreserveBitmapBits(f readerWriterAt, fsOffset int64, sb *superblock, group
 			}
 			if !matched && ext4LockDebug {
 				if lastD != nil && lastBmap != nil {
-					// Emit on-disk forensic snapshot to capture last-read state.
-					dumpForensicSnapshot(key, bits, wantMap, lastD, lastBmap)
 					for _, bit := range bits {
 						ri, ok := wantMap[bit]
 						var want bool

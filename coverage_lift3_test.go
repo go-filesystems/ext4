@@ -332,28 +332,6 @@ func TestDumpDebugLog(t *testing.T) {
 	}
 }
 
-// TestDumpForensicSnapshot exercises dumpForensicSnapshot which writes a
-// summary log and (optional) raw dumps to /tmp.
-func TestDumpForensicSnapshot(t *testing.T) {
-	bits := []int{1, 2, 3}
-	wantMap := map[int]reservationInfo{
-		1: {want: true, seq: 7},
-	}
-	d := &bgd{raw: []byte{0x01, 0x02, 0x03}, BlockBitmapBlock: 8}
-	dumpForensicSnapshot("test-key", bits, wantMap, d, []byte{0xFF, 0xEE})
-	// Also exercise the nil-d / nil-bmap branch.
-	dumpForensicSnapshot("test-key-nil", bits, wantMap, nil, nil)
-}
-
-// TestAppliedDumpPath covers the small path-formatting helper used by the
-// commit dispatcher's snapshot writer.
-func TestAppliedDumpPath(t *testing.T) {
-	p := appliedDumpPath(1234, 567)
-	if !bytes.Contains([]byte(p), []byte("1234")) || !bytes.Contains([]byte(p), []byte("567")) {
-		t.Fatalf("appliedDumpPath unexpected: %q", p)
-	}
-}
-
 // TestLockBGDTable covers the BGD-table lock acquisition pair which sits in
 // metadata_locks.go and was 0% in baseline.
 func TestLockBGDTable(t *testing.T) {

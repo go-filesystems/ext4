@@ -1066,47 +1066,6 @@ func (tx *Transaction) Commit() error {
 		if _, err := writeAtWithTrace(j.f, j.fsOffset, j.sb, off, dataCopy); err != nil {
 			return fmt.Errorf("ext4: apply tx entry block %d: %w", e.Block, err)
 		}
-		// Optionally dump the applied on-disk bytes for each transaction
-		// entry to aid debugging of bitmap/bgds and to correlate writes.
-		if os.Getenv("EXT4_DUMP_TX_BLOCKS") == "1" {
-			buf := make([]byte, j.blockSize)
-			if _, rerr := j.f.ReadAt(buf, off); rerr == nil {
-				dumpPath := appliedDumpPath(seq, uint64(e.Block))
-				_ = os.WriteFile(dumpPath, buf, 0644)
-				debugPrintf("DEBUG txCommit seq=%d applied block dump=%d path=%s ts=%d\n", seq, e.Block, dumpPath, time.Now().UnixNano())
-			} else {
-				debugPrintf("DEBUG txCommit seq=%d applied block readback failed block=%d err=%v ts=%d\n", seq, e.Block, rerr, time.Now().UnixNano())
-			}
-		}
-	}
-
-	// If the user requested focus on a specific seq, force a readback dump of
-	// all applied blocks for that sequence to guarantee we capture authoritative
-	// on-disk bytes for forensic analysis. Run asynchronously to avoid blocking
-	// the commit path.
-	if fsEnv := os.Getenv("EXT4_FOCUS_SEQ"); fsEnv != "" {
-		if fsVal, err := strconv.ParseUint(fsEnv, 10, 64); err == nil {
-			if fsVal == seq {
-				// capture block numbers to avoid holding large data buffers
-				blocks := make([]uint64, len(entries))
-				for i := range entries {
-					blocks[i] = entries[i].Block
-				}
-				go func(s uint64, blks []uint64) {
-					for _, b := range blks {
-						off := j.fsOffset + int64(b)*int64(j.blockSize)
-						buf := make([]byte, j.blockSize)
-						if _, rerr := j.f.ReadAt(buf, off); rerr == nil {
-							dumpPath := appliedDumpPath(s, b)
-							_ = os.WriteFile(dumpPath, buf, 0644)
-							debugPrintf("DEBUG txCommit focused appliedDump seq=%d blk=%d path=%s ts=%d\n", s, b, dumpPath, time.Now().UnixNano())
-						} else if ext4LockDebug {
-							debugPrintf("DEBUG txCommit focused readback failed seq=%d blk=%d err=%v\n", s, b, rerr)
-						}
-					}
-				}(seq, blocks)
-			}
-		}
 	}
 
 	if j.fsFile != nil {
@@ -1141,7 +1100,6 @@ func (tx *Transaction) Commit() error {
 		want := strings.TrimPrefix(fname, "/")
 		found := false
 		var foundBlock uint64
-		var foundData []byte
 		for _, e := range entries {
 			// Attempt to parse directory entries from this block and
 			// look for the filename.
@@ -1150,8 +1108,6 @@ func (tx *Transaction) Commit() error {
 				if de.Name == want {
 					found = true
 					foundBlock = e.Block
-					// copy the block data for optional dumping
-					foundData = append([]byte(nil), e.Data...)
 					break
 				}
 			}
@@ -1160,29 +1116,8 @@ func (tx *Transaction) Commit() error {
 			}
 		}
 
-		// Optionally dump any blocks that parse as directory blocks for
-		// offline inspection. This helps compare how directory blocks
-		// evolve across transactions when diagnosing missing entries.
-		if os.Getenv("EXT4_DUMP_DIRBLOCKS") == "1" {
-			for _, e := range entries {
-				des := parseDirBlock(e.Data)
-				if len(des) == 0 {
-					continue
-				}
-				dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_dir.bin", seq, e.Block)
-				_ = os.WriteFile(dumpPath, e.Data, 0644)
-				debugPrintf("DEBUG txCommit seq=%d dumped dir block=%d path=%s entries=%d\n", seq, e.Block, dumpPath, len(des))
-			}
-		}
 		if found {
-			// Optionally dump the raw block bytes for offline inspection.
-			if os.Getenv("EXT4_DUMP_DIRBLOCKS") == "1" && len(foundData) > 0 {
-				dumpPath := fmt.Sprintf("/tmp/ext4_seq_%d_block_%d_%s.bin", seq, foundBlock, strings.ReplaceAll(want, "/", "_"))
-				_ = os.WriteFile(dumpPath, foundData, 0644)
-				debugPrintf("DEBUG txCommit seq=%d applied entries CONTAIN dir entry name=%q foundBlock=%d dump=%s\n", seq, fname, foundBlock, dumpPath)
-			} else {
-				debugPrintf("DEBUG txCommit seq=%d applied entries CONTAIN dir entry name=%q foundBlock=%d\n", seq, fname, foundBlock)
-			}
+			debugPrintf("DEBUG txCommit seq=%d applied entries CONTAIN dir entry name=%q foundBlock=%d\n", seq, fname, foundBlock)
 		} else {
 			debugPrintf("DEBUG txCommit seq=%d applied entries DO NOT contain dir entry name=%q blocks=%v\n", seq, fname, blocks)
 		}
