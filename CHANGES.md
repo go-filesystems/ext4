@@ -3,6 +3,17 @@ Changelog
 
 Recent local changes:
 
+- Delete path fixes (PATCH, v0.7.3): `DeleteDir` now scrubs the removed
+  directory inode (links 0, `i_dtime`, size 0, no blocks), decrements
+  `bg_used_dirs_count` and keeps the checksums right; the parent's link count
+  was already decremented. A directory that grew an extent child block now
+  counts that block in `i_blocks`. Freeing bitmap bits no longer waits out a
+  polling bound for a bit that nothing was waiting on, which made deletes slow.
+  `e2fsck -fn` now covers 1 KiB and 4 KiB blocks x 3 MiB and 8 MiB files,
+  fragmented files of 60 and 120 KiB, and nested and wide directory removal.
+  Allocations per create+delete (`-benchmem`): file 1632 to 1620, directory
+  2556 to 2672 (the extra inode write-back).
+
 - DeleteFile scrubs the inode it frees (PATCH): when the last link goes, the
   inode now gets links 0, an `i_dtime`, size 0, no blocks and an empty extent
   tree, and the blocks of a multi-level extent tree (index and leaf blocks)

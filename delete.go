@@ -14,7 +14,7 @@ import (
 var removeDirChildDir func(readerWriterAt, int64, *superblock, string) error
 var removeDirChildFile = removeFile
 var removeDirFreeBlocks = freeInodeBlocks
-var removeDirFreeSlot = freeInodeSlot
+var removeDirFreeSlot = freeDirInodeSlot
 
 func init() {
 	removeDirChildDir = removeDirTree
@@ -169,6 +169,16 @@ func scrubFreedInode(in *inode, dtime uint32) {
 
 // freeInodeSlot marks inode inodeNum as free in its block group bitmap.
 func freeInodeSlot(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum uint32) error {
+	return freeInodeSlotKind(f, fsOffset, sb, inodeNum, false)
+}
+
+// freeDirInodeSlot is freeInodeSlot for a directory: it also decrements the
+// group's bg_used_dirs_count, as ext4_free_inode does for a directory.
+func freeDirInodeSlot(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum uint32) error {
+	return freeInodeSlotKind(f, fsOffset, sb, inodeNum, true)
+}
+
+func freeInodeSlotKind(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum uint32, dir bool) error {
 	idx := inodeNum - 1
 	g := idx / sb.InodesPerGroup
 	bit := int(idx % sb.InodesPerGroup)
@@ -194,6 +204,9 @@ func freeInodeSlot(f readerWriterAt, fsOffset int64, sb *superblock, inodeNum ui
 	}
 	clearBit(bmap, bit)
 	d.FreeInodesCount++
+	if dir && d.UsedDirsCount > 0 {
+		d.UsedDirsCount--
+	}
 
 	// Release BGD before performing IO. Keep bitmap locked and write it
 	// without re-acquiring the bitmap lock inside writeBitmapBufNoLock.
@@ -319,6 +332,12 @@ func removeDirTree(f readerWriterAt, fsOffset int64, sb *superblock, path string
 
 	// Free the directory data blocks and inode slot.
 	if err := removeDirFreeBlocks(f, fsOffset, sb, target); err != nil {
+		return err
+	}
+	// Leave the inode as the kernel's rmdir does (no links, a deletion time,
+	// no size, no blocks, an empty extent tree) before its slot is released.
+	scrubFreedInode(target, uint32(time.Now().Unix()))
+	if err := writeInode(f, fsOffset, sb, target); err != nil {
 		return err
 	}
 	if err := removeDirFreeSlot(f, fsOffset, sb, target.num); err != nil {

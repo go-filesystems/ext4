@@ -817,14 +817,16 @@ func unreserveBitmapBits(f readerWriterAt, fsOffset int64, sb *superblock, group
 					// Verify per-bit desired values match on-disk bitmap
 					for _, bit := range bits {
 						ri, ok := wantMap[bit]
-						var want bool
 						if !ok {
-							// If we don't have an explicit desired value, assume true
-							// (allocated) to be conservative and avoid races.
-							want = true
-						} else {
-							want = ri.want
+							// No pending want: the dispatcher already applied and
+							// retired this reservation (a freed bit has been
+							// cleared on disk by the time its ack arrives), so
+							// there is nothing left to verify. Defaulting to
+							// "allocated" here made every freed block wait out
+							// all maxAttempts sleeps (~5 s per delete).
+							continue
 						}
+						want := ri.want
 						if bit < 0 || bit >= len(bmap)*8 {
 							allMatch = false
 							break
@@ -1059,14 +1061,10 @@ func unreserveBitmapBits(f readerWriterAt, fsOffset int64, sb *superblock, group
 				// Verify per-bit desired values match on-disk bitmap
 				for _, bit := range bits {
 					ri, ok := wantMap[bit]
-					var want bool
 					if !ok {
-						// If we don't have an explicit desired value, assume true
-						// (allocated) to be conservative and avoid races.
-						want = true
-					} else {
-						want = ri.want
+						continue // already retired: nothing to verify
 					}
+					want := ri.want
 					if bit < 0 || bit >= len(bmap)*8 {
 						allMatch = false
 						break
